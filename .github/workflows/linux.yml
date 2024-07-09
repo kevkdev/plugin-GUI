@@ -45,7 +45,7 @@ jobs:
         curl -H $user_info -T $zipfile "https://openephysgui.jfrog.io/artifactory/1.0.0-dev/linux/$zipfile"
       shell: bash
     - name: deploy_preview
-      if: github.ref_type == 'refs/heads/testing-juce8'
+      if: github.ref == 'refs/heads/testing-juce8'
       env:
         artifactoryApiKey: ${{ secrets.artifactoryApiKey }}
       run: |

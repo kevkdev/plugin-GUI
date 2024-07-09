@@ -98,7 +98,7 @@ jobs:
         user_info="X-JFrog-Art-Api:$artifactoryApiKey"
         curl -H $user_info -T $zipfile "https://openephysgui.jfrog.io/artifactory/1.0.0-dev/mac/$zipfile"
     - name: deploy_preview
-      if: github.ref_type == 'refs/heads/testing-juce8'
+      if: github.ref == 'refs/heads/testing-juce8'
       env:
         artifactoryApiKey: ${{ secrets.artifactoryApiKey }}
         MACOS_CERTIFICATE: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
