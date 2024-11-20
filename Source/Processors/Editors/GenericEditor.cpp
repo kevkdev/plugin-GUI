@@ -22,6 +22,7 @@
 */
 
 #include "GenericEditor.h"
+#include "VisualizerEditor.h"
 
 #include "../../CoreServices.h"
 #include "../GenericProcessor/GenericProcessor.h"
@@ -428,7 +429,15 @@ void GenericEditor::editorStartAcquisition()
     for (auto param : getProcessor()->getParameters())
     {
         if (param->shouldDeactivateDuringAcquisition())
+        {
             param->setEnabled (false);
+
+            if (param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+                && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+            {
+                streamSelector->setEnabled (false);
+            }
+        }
     }
 
     for (auto stream : getProcessor()->dataStreams)
@@ -437,6 +446,24 @@ void GenericEditor::editorStartAcquisition()
         {
             if (param->shouldDeactivateDuringAcquisition())
                 param->setEnabled (false);
+        }
+    }
+
+    // Disable Visualizer parameters that should not be active during acquisition
+    if (isVisualizerEditor() && ((VisualizerEditor*) this)->canvas != nullptr)
+    {
+        for (auto* param : ((VisualizerEditor*) this)->canvas->getParameters())
+        {
+            if (param->shouldDeactivateDuringAcquisition())
+            {
+                param->setEnabled (false);
+
+                if (param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+                    && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+                {
+                    streamSelector->setEnabled (false);
+                }
+            }
         }
     }
 
@@ -457,7 +484,15 @@ void GenericEditor::editorStopAcquisition()
     for (auto param : getProcessor()->getParameters())
     {
         if (param->shouldDeactivateDuringAcquisition())
+        {
             param->setEnabled (true);
+
+            if (param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+                && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+            {
+                streamSelector->setEnabled (true);
+            }
+        }
     }
 
     for (auto stream : getProcessor()->dataStreams)
@@ -466,6 +501,24 @@ void GenericEditor::editorStopAcquisition()
         {
             if (param->shouldDeactivateDuringAcquisition())
                 param->setEnabled (true);
+        }
+    }
+
+    // Disable Visualizer parameters that should not be active during acquisition
+    if (isVisualizerEditor() && ((VisualizerEditor*) this)->canvas != nullptr)
+    {
+        for (auto* param : ((VisualizerEditor*) this)->canvas->getParameters())
+        {
+            if (param->shouldDeactivateDuringAcquisition())
+            {
+                param->setEnabled (true);
+
+                if (param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+                    && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+                {
+                    streamSelector->setEnabled (true);
+                }
+            }
         }
     }
 
@@ -801,6 +854,7 @@ void UtilityButton::setCorners (bool UL, bool UR, bool LL, bool LR)
 void UtilityButton::setEnabledState (bool state)
 {
     isEnabled = state;
+    setEnabled (state);
 
     repaint();
 }
@@ -812,6 +866,8 @@ void UtilityButton::setRadius (float r)
 
 void UtilityButton::paintButton (Graphics& g, bool isMouseOver, bool isButtonDown)
 {
+    isEnabled = Button::isEnabled();
+
     if (getToggleState())
     {
         g.setColour (findColour (ThemeColours::highlightedFill));
@@ -834,10 +890,10 @@ void UtilityButton::paintButton (Graphics& g, bool isMouseOver, bool isButtonDow
 
     g.setFont (font);
 
-    if (isEnabled || ! isButtonDown)
-        g.setColour (findColour (ThemeColours::defaultText));
-    else
+    if (! isEnabled || isButtonDown)
         g.setColour (findColour (ThemeColours::defaultText).withAlpha (0.4f));
+    else
+        g.setColour (findColour (ThemeColours::defaultText));
 
     g.drawFittedText (label, 1, 1, getWidth() - 2, getHeight() - 2, Justification::centred, 2, 1.0f);
 }
@@ -1075,6 +1131,20 @@ void GenericEditor::updateSelectedStream (uint16 streamId)
 
     selectedStream = streamId;
 
+    if (streamSelector != nullptr)
+    {
+        auto dataStreams = getProcessor()->getDataStreams();
+
+        for (int i = 0; i < dataStreams.size(); i++)
+        {
+            if (dataStreams[i]->getStreamId() == streamId)
+            {
+                streamSelector->setViewedIndex (i);
+                break;
+            }
+        }
+    }
+
     bool streamAvailable = streamId > 0 ? true : false;
 
     for (auto ed : parameterEditors)
@@ -1288,7 +1358,7 @@ void ThresholdSlider::paint (Graphics& g)
 
     font = font.withHeight (9.0);
     g.setFont (font);
-    int stringWidth = g.getCurrentFont().getStringWidth (valueString);
+    int stringWidth = GlyphArrangement::getStringWidthInt (font, valueString);
 
     g.setFont (font);
 

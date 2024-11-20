@@ -176,6 +176,13 @@ void CustomLookAndFeel::setTheme (ColourTheme theme)
     setColour (TextEditor::focusedOutlineColourId, currentThemeColours[ThemeColours::outline]);
     setColour (TextEditor::shadowColourId, transparent);
 
+    float darkerAmount = theme == LIGHT ? 0.0f : 0.6f;
+    setColour (CodeEditorComponent::backgroundColourId, currentThemeColours[ThemeColours::controlPanelBackground].darker (darkerAmount));
+    setColour (CodeEditorComponent::defaultTextColourId, currentThemeColours[ThemeColours::controlPanelText]);
+    setColour (CodeEditorComponent::highlightColourId, currentThemeColours[ThemeColours::controlPanelBackground].contrasting (0.5f).withAlpha (0.4f));
+    setColour (CodeEditorComponent::lineNumberBackgroundId, currentThemeColours[ThemeColours::controlPanelBackground]);
+    setColour (CodeEditorComponent::lineNumberTextId, currentThemeColours[ThemeColours::controlPanelText]);
+
     setColour (CaretComponent::caretColourId, currentThemeColours[ThemeColours::defaultText]);
 
     setColour (Label::backgroundColourId, transparent);
@@ -211,12 +218,12 @@ void CustomLookAndFeel::setTheme (ColourTheme theme)
     setColour (Slider::rotarySliderOutlineColourId, currentThemeColours[ThemeColours::widgetBackground]);
     setColour (Slider::textBoxTextColourId, currentThemeColours[ThemeColours::defaultText]);
     setColour (Slider::textBoxBackgroundColourId, transparent);
-    setColour (Slider::textBoxHighlightColourId, currentThemeColours[ThemeColours::defaultFill].withAlpha (0.4f));
+    setColour (Slider::textBoxHighlightColourId, currentThemeColours[ThemeColours::menuHighlightBackground].withAlpha (0.4f));
     setColour (Slider::textBoxOutlineColourId, currentThemeColours[ThemeColours::outline]);
 
     setColour (ResizableWindow::backgroundColourId, currentThemeColours[ThemeColours::componentBackground]);
 
-    setColour (DocumentWindow::textColourId, currentThemeColours[ThemeColours::defaultText]);
+    setColour (DocumentWindow::textColourId, currentThemeColours[ThemeColours::controlPanelText]);
 
     setColour (AlertWindow::backgroundColourId, currentThemeColours[ThemeColours::componentBackground]);
     setColour (AlertWindow::textColourId, currentThemeColours[ThemeColours::defaultText]);
@@ -242,6 +249,9 @@ void CustomLookAndFeel::setTheme (ColourTheme theme)
     setColour (TableHeaderComponent::textColourId, currentThemeColours[ThemeColours::defaultText]);
     setColour (TableHeaderComponent::outlineColourId, currentThemeColours[ThemeColours::outline]);
     setColour (TableHeaderComponent::highlightColourId, currentThemeColours[ThemeColours::highlightedFill]);
+
+    setColour (GroupComponent::textColourId, currentThemeColours[ThemeColours::defaultText]);
+    setColour (GroupComponent::outlineColourId, currentThemeColours[ThemeColours::defaultText].withAlpha (0.5f));
 }
 
 //==============================================================================
@@ -707,7 +717,6 @@ void CustomLookAndFeel::drawMenuBarBackground (Graphics& g, int width, int heigh
     Rectangle<int> r (1, 0, width - 2, height);
 
     g.setColour (colour.contrasting (0.15f));
-    g.fillRect (r.removeFromTop (1));
     g.fillRect (r.removeFromBottom (1));
 
     g.setGradientFill (ColourGradient::vertical (colour, 0, colour.darker (0.2f), (float) height));
@@ -718,14 +727,14 @@ void CustomLookAndFeel::drawMenuBarBackground (Graphics& g, int width, int heigh
         g.setColour (findColour (ThemeColours::defaultText));
         String ver = "v" + String (ProjectInfo::versionString);
         g.setFont (getCommonMenuFont());
-        int verStrWidth = getCommonMenuFont().getStringWidth (ver);
+        int verStrWidth = GlyphArrangement::getStringWidthInt (getCommonMenuFont(), ver);
         g.drawText (ver, width - verStrWidth - 10, 0, verStrWidth, height, Justification::centred);
     }
 }
 
 Font CustomLookAndFeel::getMenuBarFont (MenuBarComponent& menuBar, int /*itemIndex*/, const String& /*itemText*/)
 {
-    return Font ( FontOptions ( getCommonMenuFont().getTypefaceName(), "Medium", menuBar.getHeight() * 0.65f));
+    return Font (FontOptions (getCommonMenuFont().getTypefaceName(), "Medium", menuBar.getHeight() * 0.65f));
 }
 
 //==================================================================
@@ -948,7 +957,7 @@ public:
 
     void paintButton (Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        auto background = findColour (ThemeColours::widgetBackground);
+        auto pathColour = findColour (ThemeColours::controlPanelText);
 
         // g.fillAll (background);
 
@@ -958,7 +967,6 @@ public:
         if (shouldDrawButtonAsHighlighted)
         {
             g.fillAll();
-            g.setColour (background);
         }
 
         auto& p = getToggleState() ? toggledShape : normalShape;
@@ -968,6 +976,7 @@ public:
                                .toFloat()
                                .reduced ((float) getHeight() * 0.3f);
 
+        g.setColour (pathColour);
         g.fillPath (p, p.getTransformToScaleToFit (reducedRect, true));
     }
 
@@ -988,14 +997,14 @@ Button* CustomLookAndFeel::createDocumentWindowButton (int buttonType)
         shape.addLineSegment ({ 0.0f, 0.0f, 1.0f, 1.0f }, crossThickness);
         shape.addLineSegment ({ 1.0f, 0.0f, 0.0f, 1.0f }, crossThickness);
 
-        return new CustomDocumentWindowButton ("close", Colour (0xff9A131D), shape, shape);
+        return new CustomDocumentWindowButton ("close", Colour (0xffc42b1c), shape, shape);
     }
 
     if (buttonType == DocumentWindow::minimiseButton)
     {
         shape.addLineSegment ({ 0.0f, 0.5f, 1.0f, 0.5f }, crossThickness);
 
-        return new CustomDocumentWindowButton ("minimise", Colour (0xffaa8811), shape, shape);
+        return new CustomDocumentWindowButton ("minimise", findColour (ThemeColours::defaultFill), shape, shape);
     }
 
     if (buttonType == DocumentWindow::maximiseButton)
@@ -1012,7 +1021,7 @@ Button* CustomLookAndFeel::createDocumentWindowButton (int buttonType)
         fullscreenShape.addRectangle (45.0f, 45.0f, 100.0f, 100.0f);
         PathStrokeType (30.0f).createStrokedPath (fullscreenShape, fullscreenShape);
 
-        return new CustomDocumentWindowButton ("maximise", Colour (0xff0A830A), shape, fullscreenShape);
+        return new CustomDocumentWindowButton ("maximise", findColour (ThemeColours::defaultFill), shape, fullscreenShape);
     }
 
     jassertfalse;
@@ -1060,13 +1069,18 @@ void CustomLookAndFeel::drawDocumentWindowTitleBar (DocumentWindow& window, Grap
 
     auto isActive = window.isActiveWindow();
 
-    g.setColour (findColour (ThemeColours::componentParentBackground));
-    g.fillAll();
+    const Colour colour (findColour (ThemeColours::componentParentBackground));
 
-    Font font (withDefaultMetrics (FontOptions ("Inter", "Bold", (float) h * 0.65f)));
+    g.setGradientFill (ColourGradient::vertical (colour, 0, colour.darker (0.2f), (float) h));
+    g.fillRect (0, 0, w, h);
+
+    g.setColour (colour.contrasting (0.15f));
+    g.fillRect (0, h - 1, w, 1);
+
+    Font font (withDefaultMetrics (FontOptions ("Inter", "Semi Bold", (float) h * 0.65f)));
     g.setFont (font);
 
-    auto textW = font.getStringWidth (window.getName());
+    auto textW = GlyphArrangement::getStringWidthInt (font, window.getName());
     auto iconW = 0;
     auto iconH = 0;
 
@@ -1076,7 +1090,7 @@ void CustomLookAndFeel::drawDocumentWindowTitleBar (DocumentWindow& window, Grap
         iconW = icon->getWidth() * iconH / icon->getHeight() + 4;
     }
 
-    textW = jmin (titleSpaceW, textW + iconW);
+    textW = jmin (titleSpaceW, textW + iconW + 4);
     auto textX = drawTitleTextOnLeft ? titleSpaceX
                                      : jmax (titleSpaceX, (w - textW) / 2);
 
@@ -1087,7 +1101,7 @@ void CustomLookAndFeel::drawDocumentWindowTitleBar (DocumentWindow& window, Grap
     {
         g.setOpacity (isActive ? 1.0f : 0.6f);
         g.drawImageWithin (*icon, textX, (h - iconH) / 2, iconW, iconH, RectanglePlacement::centred, false);
-        textX += iconW;
+        textX += iconW + 4;
         textW -= iconW;
     }
 
@@ -1096,6 +1110,7 @@ void CustomLookAndFeel::drawDocumentWindowTitleBar (DocumentWindow& window, Grap
     else
         g.setColour (Colours::whitesmoke);
 
+    g.setOpacity (isActive ? 1.0f : 0.6f);
     g.drawText (window.getName(), textX, 0, textW, h, Justification::centredLeft, true);
 }
 
@@ -1120,7 +1135,7 @@ int CustomLookAndFeel::getTabButtonSpaceAroundImage()
 
 int CustomLookAndFeel::getTabButtonBestWidth (TabBarButton& button, int tabDepth)
 {
-    int width = Font ( FontOptions( (float) tabDepth * 0.7f)).getStringWidth (button.getButtonText().trim())
+    int width = GlyphArrangement::getStringWidth (Font (FontOptions ((float) tabDepth * 0.7f)), (button.getButtonText().trim()))
                 + getTabButtonOverlap (tabDepth) * 2 + 15;
 
     if (auto* extraComponent = button.getExtraComponent())

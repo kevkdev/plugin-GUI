@@ -92,14 +92,17 @@ void CustomTabButton::mouseExit (const MouseEvent& event)
 
 void CustomTabButton::mouseDrag (const MouseEvent& event)
 {
-    DragAndDropContainer* const dragContainer = DragAndDropContainer::findParentDragContainerFor (this);
+    if (event.mods.isLeftButtonDown())
+    {
+        DragAndDropContainer* const dragContainer = DragAndDropContainer::findParentDragContainerFor (this);
 
-    Array<var> dragData;
-    dragData.add ("Tab");
-    dragData.add (nodeId);
-    dragData.add (getName());
+        Array<var> dragData;
+        dragData.add ("Tab");
+        dragData.add (nodeId);
+        dragData.add (getName());
 
-    dragContainer->startDragging (dragData, this);
+        dragContainer->startDragging (dragData, this);
+    }
 }
 
 void CustomTabButton::itemDragEnter (const SourceDetails& dragSourceDetails)
@@ -135,7 +138,7 @@ void CustomTabButton::itemDropped (const SourceDetails& dragSourceDetails)
 
     LOGD ("ITEM DROPPED ON TAB");
 
-    parent->moveTabAfter (incomingNodeId, name, nodeId);
+    parent->moveTabByNodeId (name, incomingNodeId, nodeId);
 }
 
 void CustomTabButton::paintButton (Graphics& g,
@@ -217,6 +220,11 @@ void DraggableTabComponent::itemDropped (const juce::DragAndDropTarget::SourceDe
     int incomingNodeId = descr->getUnchecked (1);
     String name = descr->getUnchecked (2);
 
+    // Skip if the tab is already in the tabbed component and the drop is not after the last tab
+    if (tabNodeIds.contains (incomingNodeId)
+        && dragSourceDetails.localPosition.y < getTabbedButtonBar().getTabButton (getNumTabs() - 1)->getBounds().getBottom())
+        return;
+
     LOGD ("ITEM DROPPED ON PARENT");
 
     Component* contentComponent = dataViewport->getContentComponentForNodeId (incomingNodeId);
@@ -268,6 +276,8 @@ bool DraggableTabComponent::removeTabForNodeId (int nodeId, bool sendNotificatio
                     AccessClass::getUIComponent()->closeInfoTab();
                 else if (nodeId == 1)
                     AccessClass::getUIComponent()->closeGraphViewer();
+                else if (nodeId == 2)
+                    AccessClass::getUIComponent()->closeConsoleViewer();
             }
         }
 
@@ -279,18 +289,37 @@ bool DraggableTabComponent::removeTabForNodeId (int nodeId, bool sendNotificatio
     }
 }
 
-void DraggableTabComponent::moveTabAfter (int incomingNodeId, String name, int localNodeId)
+void DraggableTabComponent::moveTabByNodeId (const String& name, int incomingNodeId, int localNodeId)
 {
-    Component* contentComponent = dataViewport->getContentComponentForNodeId (incomingNodeId);
-    dataViewport->removeTab (incomingNodeId, false);
+    int localIndex = tabNodeIds.indexOf (localNodeId);
+    int incomingIndex = tabNodeIds.indexOf (incomingNodeId);
 
-    int index = tabNodeIds.indexOf (localNodeId) + 1;
+    if (localIndex == -1)
+        return;
 
-    tabNodeIds.insert (index, incomingNodeId);
+    if (incomingIndex == -1)
+    {
+        Component* contentComponent = dataViewport->getContentComponentForNodeId (incomingNodeId);
 
-    addTab (name, Colours::darkgrey, contentComponent, false, index);
+        if (contentComponent == nullptr)
+            return;
 
-    setCurrentTabIndex (index);
+        dataViewport->removeTab (incomingNodeId, false);
+
+        tabNodeIds.insert (localIndex + 1, incomingNodeId);
+
+        addTab (name, Colours::darkgrey, contentComponent, false, localIndex + 1);
+
+        setCurrentTabIndex (localIndex + 1);
+
+        return;
+    }
+
+    tabNodeIds.move (incomingIndex, localIndex);
+
+    moveTab (incomingIndex, localIndex);
+
+    setCurrentTabIndex (localIndex);
 }
 
 Component* DraggableTabComponent::getContentComponentForNodeId (int nodeId)
@@ -396,6 +425,64 @@ void DraggableTabComponent::buttonClicked (Button* button)
     }
 }
 
+void DraggableTabComponent::popupMenuClickOnTab (int tabIndex, const String& tabName)
+{
+    int nodeId = tabNodeIds[tabIndex];
+
+    // don't allow renaming of info or graph tabs
+    if (nodeId < 100)
+    {
+        if (nodeId == 2)
+        {
+            PopupMenu m;
+
+            m.addItem ("Move to New Window", [this]()
+                       { AccessClass::getUIComponent()->openConsoleWindow(); });
+
+            m.showMenuAsync (PopupMenu::Options().withStandardItemHeight (20));
+            return;
+        }
+        else
+        {
+            return;
+        }
+    }
+
+    auto* tabButton = getTabbedButtonBar().getTabButton (tabIndex);
+
+    // create a label to edit the name
+    Label* editNameLabel = new Label ("EditName", tabName);
+    editNameLabel->setFont (FontOptions ("Inter", "Regular", 16.0f));
+    editNameLabel->setEditable (true, false, true);
+    editNameLabel->setSize (100, 20);
+    editNameLabel->setColour (Label::backgroundColourId, findColour (ThemeColours::widgetBackground));
+    editNameLabel->showEditor();
+
+    // set the text change callback
+    editNameLabel->onTextChange = [this, tabIndex, nodeId, editNameLabel]()
+    {
+        setTabName (tabIndex, editNameLabel->getText());
+
+        // update the tab text in the VisualizerEditor
+        GenericProcessor* processor = AccessClass::getProcessorGraph()->getProcessorWithNodeId (nodeId);
+        if (processor != nullptr && processor->getEditor()->isVisualizerEditor())
+        {
+            VisualizerEditor* editor = (VisualizerEditor*) processor->getEditor();
+            editor->tabText = editNameLabel->getText();
+        }
+
+        // dismiss the callout box
+        if (auto* parent = editNameLabel->getParentComponent())
+            parent->exitModalState (0);
+    };
+
+    auto tabBounds = tabButton->getScreenBounds().withTrimmedBottom (tabButton->getHeight() / 2);
+
+    // launch the callout box at the tab button's center position
+    auto& editBox = CallOutBox::launchAsynchronously (std::unique_ptr<Component> (editNameLabel), tabBounds, nullptr);
+    editBox.setDismissalMouseClicksAreAlwaysConsumed (true);
+}
+
 AddTabbedComponentButton::AddTabbedComponentButton()
     : Button ("Add Tabbed Component")
 {
@@ -420,6 +507,40 @@ void AddTabbedComponentButton::paintButton (Graphics& g, bool isMouseOverButton,
     g.strokePath (path, PathStrokeType (1.0f));
 }
 
+TabbedComponentResizerBar::TabbedComponentResizerBar (StretchableLayoutManager* layoutToUse)
+    : StretchableLayoutResizerBar (layoutToUse, 1, true), layout (layoutToUse)
+{
+    dragHandle = Drawable::parseSVGPath (
+        "M19.63,11.31,16.5,9.17a1,1,0,0,0-1.5.69v4.28a1,1,0,0,0,1.5.69l3.13-2.14A.82.82,0,0,0,19.63,11.31ZM4.37,"
+        "12.69,7.5,14.83A1,1,0,0,0,9,14.14V9.86a1,1,0,0,0-1.5-.69L4.37,11.31A.82.82,0,0,0,4.37,12.69Z");
+}
+
+void TabbedComponentResizerBar::paint (Graphics& g)
+{
+    int w = getWidth();
+    int h = getHeight();
+
+    if (isMouseButtonDown())
+        g.setColour (findColour (ThemeColours::highlightedFill));
+    else if (isMouseOver())
+        g.setColour (findColour (ThemeColours::defaultFill));
+    else
+        g.setColour (findColour (ThemeColours::defaultFill).withAlpha (0.6f));
+
+    g.fillRect ((w / 2) - 1, 0, 2, h);
+
+    g.fillPath (dragHandle, dragHandle.getTransformToScaleToFit (0, (h / 2) - (w / 2), w, w, true));
+}
+
+void TabbedComponentResizerBar::mouseDoubleClick (const MouseEvent& event)
+{
+    if (Component* parent = getParentComponent())
+    {
+        layout->setItemPosition (1, (parent->getWidth() / 2) - (getWidth() / 2));
+        parent->resized();
+    }
+}
+
 DataViewport::DataViewport() : shutdown (false)
 {
     DraggableTabComponent* c = new DraggableTabComponent (this);
@@ -429,15 +550,28 @@ DataViewport::DataViewport() : shutdown (false)
     addTabbedComponentButton = std::make_unique<AddTabbedComponentButton>();
     addAndMakeVisible (addTabbedComponentButton.get());
     addTabbedComponentButton->addListener (this);
+
+    tabbedComponentResizer = std::make_unique<TabbedComponentResizerBar> (&tabbedComponentLayout);
+    addChildComponent (tabbedComponentResizer.get());
 }
 
 void DataViewport::resized()
 {
     int width = getWidth() / draggableTabComponents.size();
 
-    for (int i = 0; i < draggableTabComponents.size(); i++)
+    if (draggableTabComponents.size() == 1)
+        draggableTabComponents[0]->setBounds (0, 0, width, getHeight());
+    else if (draggableTabComponents.size() == 2)
     {
-        draggableTabComponents[i]->setBounds (width * i, 0, width, getHeight());
+        Component* comps[] = { draggableTabComponents[0], tabbedComponentResizer.get(), draggableTabComponents[1] };
+        tabbedComponentLayout.layOutComponents (comps, 3, 0, 0, getWidth(), getHeight(), false, true);
+    }
+    else
+    {
+        for (int i = 0; i < draggableTabComponents.size(); i++)
+        {
+            draggableTabComponents[i]->setBounds (width * i, 0, width, getHeight());
+        }
     }
 
     addTabbedComponentButton->setBounds (getWidth() - 24, getHeight() - 26, 20, 20);
@@ -480,6 +614,11 @@ void DataViewport::removeTab (int nodeId, bool sendNotification)
                 {
                     draggableTabComponents.removeObject (draggableTabComponent);
                     activeTabbedComponent--;
+
+                    tabbedComponentLayout.clearAllItems();
+
+                    tabbedComponentResizer->setVisible (draggableTabComponents.size() == 2);
+
                     resized();
 
                     if (draggableTabComponents[activeTabbedComponent]->getNumTabs() > 1)
@@ -501,6 +640,12 @@ void DataViewport::buttonClicked (Button* button)
         DraggableTabComponent* d = new DraggableTabComponent (this);
         addAndMakeVisible (d);
         draggableTabComponents.add (d);
+
+        tabbedComponentResizer->setVisible (true);
+
+        tabbedComponentLayout.setItemLayout (0, -0.25, -0.75, -0.5);
+        tabbedComponentLayout.setItemLayout (1, 12, 12, 12);
+        tabbedComponentLayout.setItemLayout (2, -0.25, -0.75, -0.5);
 
         resized();
 
@@ -537,6 +682,10 @@ void DataViewport::removeTabbedComponent (DraggableTabComponent* draggableTabCom
         if (activeTabbedComponent > draggableTabComponents.size() - 1)
             activeTabbedComponent--;
 
+        tabbedComponentLayout.clearAllItems();
+
+        tabbedComponentResizer->setVisible (draggableTabComponents.size() == 2);
+
         resized();
     }
 }
@@ -570,6 +719,11 @@ void DataViewport::loadStateFromXml (XmlElement* xml)
     if (dvXml != nullptr)
     {
         LOGD ("Loading DataViewport state from XML...");
+
+        // remove info, graph, and console tabs
+        for (int i = 0; i < 3; i++)
+            removeTab (i);
+
         for (auto* xmlNode : dvXml->getChildIterator())
         {
             if (xmlNode->hasTagName ("TABBEDCOMPONENT"))
@@ -586,6 +740,12 @@ void DataViewport::loadStateFromXml (XmlElement* xml)
                         DraggableTabComponent* d = new DraggableTabComponent (this);
                         addAndMakeVisible (d);
                         draggableTabComponents.add (d);
+
+                        tabbedComponentResizer->setVisible (draggableTabComponents.size() == 2);
+
+                        tabbedComponentLayout.setItemLayout (0, -0.25, -0.75, -0.5);
+                        tabbedComponentLayout.setItemLayout (1, 12, 12, 12);
+                        tabbedComponentLayout.setItemLayout (2, -0.25, -0.75, -0.5);
                     }
 
                     activeTabbedComponent = index;
@@ -603,9 +763,17 @@ void DataViewport::loadStateFromXml (XmlElement* xml)
                             LOGD ("Adding tab ", nodeId, " to tabbed component ", index);
 
                             if (nodeId == 0) // info tab
+                            {
                                 AccessClass::getUIComponent()->addInfoTab();
+                            }
                             else if (nodeId == 1) // graph tab
+                            {
                                 AccessClass::getUIComponent()->addGraphTab();
+                            }
+                            else if (nodeId == 2) // console tab
+                            {
+                                AccessClass::getUIComponent()->addConsoleTab();
+                            }
                             else if (nodeId > 99) // visualizer tab
                             {
                                 GenericProcessor* processor = AccessClass::getProcessorGraph()->getProcessorWithNodeId (nodeId);

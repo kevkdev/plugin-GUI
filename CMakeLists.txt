@@ -14,6 +14,7 @@ list(GET VERSION_LIST 0 version_major)
 list(GET VERSION_LIST 1 version_minor)
 list(GET VERSION_LIST 2 version_patch)
 
+
 math(EXPR hex "(${version_major} << 16) + (${version_minor} << 8) + ${version_patch}" OUTPUT_FORMAT HEXADECIMAL)
 set(GUI_VERSION_HEX "${hex}")
 
@@ -48,6 +49,7 @@ configure_file(${RESOURCES_DIRECTORY}/Build-files/resources.rc.in ${RESOURCES_DI
 #global properties
 set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS
 	$<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
+	$<$<PLATFORM_ID:Windows>:_CONSOLE>
 	$<$<PLATFORM_ID:Windows>:NOMINMAX>
 	$<$<CONFIG:Debug>:DEBUG=1>
 	$<$<CONFIG:Debug>:_DEBUG=1>
@@ -79,6 +81,7 @@ set(JUCE_SOURCE
     ${JUCE_DIRECTORY}/include_juce_events.${JUCE_FILES_EXTENSION}
     ${JUCE_DIRECTORY}/include_juce_graphics.${JUCE_FILES_EXTENSION}
 	${JUCE_DIRECTORY}/include_juce_graphics_Harfbuzz.cpp
+	${JUCE_DIRECTORY}/include_juce_graphics_Sheenbidi.c
     ${JUCE_DIRECTORY}/include_juce_gui_basics.${JUCE_FILES_EXTENSION}
     ${JUCE_DIRECTORY}/include_juce_gui_extra.${JUCE_FILES_EXTENSION}
     ${JUCE_DIRECTORY}/include_juce_opengl.${JUCE_FILES_EXTENSION}
@@ -98,6 +101,7 @@ target_include_directories(open-ephys PRIVATE ${JUCE_DIRECTORY} ${JUCE_DIRECTORY
 target_compile_features(open-ephys PUBLIC cxx_auto_type cxx_generalized_initializers cxx_std_17)
 
 if(BUILD_TESTS)
+	enable_testing()
 	add_definitions(-DBUILD_TESTS)
 	add_library(gui_testable_source SHARED ${JUCE_SOURCE})
 	if(MSVC)
@@ -188,7 +192,6 @@ if(MSVC)
 	target_link_libraries(open-ephys setupapi.lib opengl32.lib glu32.lib)
 	set_property(TARGET open-ephys APPEND PROPERTY VS_DEBUGGER_COMMAND "Debug\\open-ephys.exe")
 	set_property(TARGET open-ephys APPEND_STRING PROPERTY LINK_FLAGS_DEBUG " /NODEFAULTLIB:\"libcmt.lib\" /NODEFAULTLIB:\"msvcrt.lib\"")
-	set_property(TARGET open-ephys APPEND_STRING PROPERTY LINK_FLAGS " /SUBSYSTEM:WINDOWS")
 	if (CMAKE_SIZEOF_VOID_P EQUAL 8)
 		set(DLLARCH "Win64")
 	else()
@@ -211,16 +214,15 @@ elseif(LINUX)
 	find_package(CURL REQUIRED)
 	find_package(PkgConfig REQUIRED)
 	find_package(Fontconfig REQUIRED)
-	pkg_check_modules(WEBKIT2GTK REQUIRED webkit2gtk-4.0)
+
 	# pkg_check_modules(GTK REQUIRED gtk+-3.0)
 
 	target_include_directories(open-ephys PRIVATE
 		/usr/include
 		/usr/include/freetype2
-		${CURL_INCLUDE_DIRS}
-		${WEBKIT2GTK_INCLUDE_DIRS}
-	)
-	target_link_libraries(open-ephys GL X11 Xext Xinerama asound dl freetype pthread rt ${Fontconfig_LIBRARIES} ${CURL_LIBRARIES} ${WEBKIT2GTK_LIBRARIES})
+		${CURL_INCLUDE_DIRS})
+
+	target_link_libraries(open-ephys GL X11 Xext Xinerama asound dl freetype pthread rt ${Fontconfig_LIBRARIES} ${CURL_LIBRARIES})
 	set_property(TARGET open-ephys APPEND_STRING PROPERTY LINK_FLAGS
 		"-fvisibility=hidden -fPIC -rdynamic -Wl,-rpath,'$ORIGIN/shared'")
 
@@ -230,10 +232,8 @@ elseif(LINUX)
             target_include_directories(gui_testable_source PRIVATE
                 /usr/include
                 /usr/include/freetype2
-                ${CURL_INCLUDE_DIRS}
-                ${WEBKIT2GTK_INCLUDE_DIRS}
-            )
-            target_link_libraries(gui_testable_source GL X11 Xext Xinerama asound dl freetype pthread rt ${Fontconfig_LIBRARIES} ${CURL_LIBRARIES} ${WEBKIT2GTK_LIBRARIES})
+                ${CURL_INCLUDE_DIRS})
+            target_link_libraries(gui_testable_source GL X11 Xext Xinerama asound dl freetype pthread rt ${Fontconfig_LIBRARIES} ${CURL_LIBRARIES})
             set_property(TARGET gui_testable_source APPEND_STRING PROPERTY LINK_FLAGS
                 "-fvisibility=hidden -fPIC -rdynamic -Wl,-rpath,'$ORIGIN/shared'")
 
@@ -241,11 +241,11 @@ elseif(LINUX)
     endif()
 elseif(APPLE)
 	set_target_properties(open-ephys PROPERTIES
-		MACOSX_BUNDLE_NAME open-ephys
+		MACOSX_BUNDLE TRUE
+		OUTPUT_NAME "Open Ephys GUI"
 		MACOSX_BUNDLE_VERSION ${GUI_VERSION}
 		MACOSX_BUNDLE_ICON_FILE "Icon.icns"
 		MACOSX_BUNDLE_INFO_PLIST "${RESOURCES_DIRECTORY}/Build-files/Info.plist.in"
-		MACOSX_BUNDLE TRUE
 		)
 	target_compile_options(open-ephys PRIVATE -fPIC -Wpartial-availability -Wno-inconsistent-missing-override)
 	target_link_options(open-ephys PRIVATE -rdynamic)
@@ -301,6 +301,7 @@ endif()
 		XCODE_ATTRIBUTE_GCC_INLINES_ARE_PRIVATE_EXTERN YES
 		XCODE_ATTRIBUTE_CLANG_LINK_OBJC_RUNTIME NO
 		XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.open-ephys.gui"
+		XCODE_ATTRIBUTE_EXECUTABLE_NAME "open-ephys"
 		)
 
 		set(MAC_RESOURCE_FILES

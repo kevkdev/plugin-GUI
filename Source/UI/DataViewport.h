@@ -156,7 +156,7 @@ public:
     void selectTab (int nodeId);
 
     /** Moves tabs based on node ID */
-    void moveTabAfter (int nodeIdA, String name, int nodeIdB);
+    void moveTabByNodeId (const String& name, int incomingNodeId, int localNodeId);
 
     /** Returns the number of tabs available */
     int getNumTabs() { return tabNodeIds.size(); }
@@ -172,6 +172,9 @@ public:
 
     /** Called when close button is clicked **/
     void buttonClicked (Button* button) override;
+
+    /** Opens a popup editable label to rename tab */
+    void popupMenuClickOnTab (int tabIndex, const String& tabName);
 
     /** Parent component*/
     DataViewport* dataViewport;
@@ -208,6 +211,33 @@ public:
 
 private:
     Path path;
+};
+
+/**
+ 
+ Custom resizer bar for tabbed components
+
+*/
+
+class TabbedComponentResizerBar : public StretchableLayoutResizerBar
+{
+public:
+    /** Constructor */
+    TabbedComponentResizerBar (StretchableLayoutManager* layoutToUse);
+
+    /** Destructor */
+    ~TabbedComponentResizerBar() {}
+
+    /** Paints the resizer bar */
+    void paint (Graphics& g) override;
+
+    /** Called when mouse is double clicked. Resets layout */
+    void mouseDoubleClick (const MouseEvent& event) override;
+
+private:
+    StretchableLayoutManager* layout;
+
+    Path dragHandle;
 };
 
 /**
@@ -277,6 +307,10 @@ private:
     //Array<int> savedTabIndices;
     //Array<String> savedTabNames;
     //Array<Component*> savedTabComponents;
+
+    /** Layout manager for tabbed components to allow resizing */
+    StretchableLayoutManager tabbedComponentLayout;
+    std::unique_ptr<TabbedComponentResizerBar> tabbedComponentResizer;
 
     /** Tabbed sub-components **/
     OwnedArray<DraggableTabComponent> draggableTabComponents;

@@ -46,12 +46,94 @@
 
 #define MS_FROM_START Time::highResolutionTicksToSeconds (Time::getHighResolutionTicks() - start) * 1000
 
+LatencyMeter::LatencyMeter (GenericProcessor* processor_)
+    : processor (processor_),
+      counter (0)
+{
+}
+
+void LatencyMeter::update (const Array<const DataStream*>& dataStreams)
+{
+    std::lock_guard<std::mutex> lock (latencyMutex); // Lock to ensure thread-safe modification
+    latencies.clear();
+
+    for (auto dataStream : dataStreams)
+    {
+        uint16 streamId = dataStream->getStreamId();
+        latencies[streamId] = std::vector<int> (10, 0); // Initialize with 10 zeros
+    }
+}
+
+void LatencyMeter::setLatestLatency (std::map<uint16, juce::int64>& processStartTimes, bool headlessMode)
+{
+    if (counter % 10 == 0) // update latency estimate every 10 process blocks
+    {
+        auto currentTime = juce::Time::getHighResolutionTicks();
+
+        for (auto& entry : processStartTimes)
+        {
+            latencies[entry.first].emplace_back (static_cast<int> (currentTime - entry.second));
+            if (latencies[entry.first].size() > 10)
+                latencies[entry.first].erase (latencies[entry.first].begin()); // Keep the size to 10
+        }
+
+        if (counter % 50 == 0) // compute mean latency every 50 process blocks
+        {
+            for (auto& entry : processStartTimes)
+            {
+                float totalLatency = 0.0f;
+
+                for (auto latency : latencies[entry.first])
+                    totalLatency += static_cast<float> (latency);
+
+                totalLatency = (totalLatency / 10.0f) / static_cast<float> (juce::Time::getHighResolutionTicksPerSecond()) * 1000.0f;
+
+                if (! headlessMode)
+                    processor->getEditor()->setMeanLatencyMs (entry.first, totalLatency);
+
+                // Store the latest total latency in a thread-safe manner
+                {
+                    std::lock_guard<std::mutex> lock (latencyMutex);
+                    latestLatencies[entry.first] = totalLatency;
+                }
+            }
+        }
+    }
+
+    counter++;
+}
+
+float LatencyMeter::getLatestLatency (uint16 key)
+{
+    std::lock_guard<std::mutex> lock (latencyMutex);
+    auto it = latestLatencies.find (key);
+    if (it != latestLatencies.end())
+        return it->second;
+    return 0.0f;
+}
+
 const String GenericProcessor::m_unusedNameString ("xxx-UNUSED-OPEN-EPHYS-xxx");
 
 std::map<int, std::vector<ProcessorAction*>> GenericProcessor::undoableActions;
 
 GenericProcessor::GenericProcessor (const String& name, bool headlessMode_)
-    : GenericProcessorBase (name), ParameterOwner (ParameterOwner::Type::OTHER), headlessMode (headlessMode_), sourceNode (nullptr), destNode (nullptr), isEnabled (true), wasConnected (false), nextAvailableChannel (0), saveOrder (-1), loadOrder (-1), currentChannel (-1), editor (nullptr), parametersAsXml (nullptr), ttlEventChannel (nullptr), sendSampleCount (true), m_name (name), m_paramsWereLoaded (false)
+    : GenericProcessorBase (name),
+      ParameterOwner (ParameterOwner::Type::OTHER),
+      headlessMode (headlessMode_),
+      sourceNode (nullptr),
+      destNode (nullptr),
+      isEnabled (true),
+      wasConnected (false),
+      nextAvailableChannel (0),
+      saveOrder (-1),
+      loadOrder (-1),
+      currentChannel (-1),
+      editor (nullptr),
+      parametersAsXml (nullptr),
+      ttlEventChannel (nullptr),
+      sendSampleCount (true),
+      m_name (name),
+      m_paramsWereLoaded (false)
 
 {
     latencyMeter = std::make_unique<LatencyMeter> (this);
@@ -337,7 +419,7 @@ void GenericProcessor::addPathParameter (
     const String& name,
     const String& displayName,
     const String& description,
-    const String& defaultValue,
+    const File& defaultValue,
     const StringArray& validFileExtensions,
     bool isDirectory,
     bool deactivateDuringAcquisition)
@@ -366,6 +448,7 @@ void GenericProcessor::addSelectedStreamParameter (
     const String& description,
     Array<String> streamNames,
     const int defaultIndex,
+    bool syncWithStreamSelector,
     bool deactivateDuringAcquisition)
 {
     SelectedStreamParameter* p =
@@ -376,6 +459,7 @@ void GenericProcessor::addSelectedStreamParameter (
                                      description,
                                      streamNames,
                                      defaultIndex,
+                                     syncWithStreamSelector,
                                      deactivateDuringAcquisition);
 
     if (scope == Parameter::PROCESSOR_SCOPE)
@@ -453,13 +537,19 @@ void GenericProcessor::addTtlLineParameter (
 }
 
 void GenericProcessor::parameterChangeRequest (Parameter* param)
-{
+{   
     currentParameter = param;
 
     setParameter (-1, 0.0f);
 
-    if (! headlessMode)
-        getEditor()->updateView();
+    if (! headlessMode
+        && dataStreams.size() > 0
+        && param->getType() == Parameter::ParameterType::SELECTED_STREAM_PARAM
+        && ((SelectedStreamParameter*) param)->shouldSyncWithStreamSelector())
+    {
+        uint16 streamId = dataStreams[param->getValue()]->getStreamId();
+        getEditor()->updateSelectedStream (streamId);
+    }
 }
 
 void GenericProcessor::setParameter (int parameterIndex, float newValue)
@@ -467,6 +557,7 @@ void GenericProcessor::setParameter (int parameterIndex, float newValue)
     if (currentParameter != nullptr)
     {
         currentParameter->updateValue();
+        currentParameter->logValueChange();
         parameterValueChanged (currentParameter);
     }
 }
@@ -474,8 +565,6 @@ void GenericProcessor::setParameter (int parameterIndex, float newValue)
 int GenericProcessor::getNextChannel (bool increment)
 {
     int chan = nextAvailableChannel;
-
-    //LOGDD("Next channel: ", chan, ", num inputs: ", getNumInputs());
 
     if (increment)
         nextAvailableChannel++;
@@ -525,7 +614,6 @@ void GenericProcessor::clearSettings()
 
     for (auto obj : continuousChannels)
     {
-        //std::cout << obj->getName() << std::endl;
         if (! obj->isLocal())
             delete obj;
         else
@@ -535,18 +623,8 @@ void GenericProcessor::clearSettings()
     continuousChannels.clearQuick (false);
     continuousChannels.addArray (continuousChannelsToKeep);
 
-    Array<EventChannel*> eventChannelsToKeep;
-
-    for (auto obj : eventChannels)
-    {
-        if (! obj->isLocal())
-            delete obj;
-        else
-            eventChannelsToKeep.add (obj);
-    }
-
-    eventChannels.clearQuick (false);
-    eventChannels.addArray (eventChannelsToKeep);
+    // Clear all event channels. No need to keep local channels around.
+    eventChannels.clear();
 
     Array<SpikeChannel*> spikeChannelsToKeep;
 
@@ -582,7 +660,6 @@ void GenericProcessor::clearSettings()
         {
             savedDataStreamParameters.add (new ParameterCollection());
 
-            //std::cout << "SAVING STREAM PARAMETERS" << std::endl;
             savedDataStreamParameters.getLast()->copyParametersFrom (obj);
 
             dataStreamsToDelete.add (obj);
@@ -608,8 +685,6 @@ void GenericProcessor::setStreamEnabled (uint16 streamId, bool isEnabled)
 
 int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
 {
-    // LOGDD("Finding best matching saved parameters for ", stream->getName(), " (", stream->getNodeId(), ")");
-
     for (int i = 0; i < savedDataStreamParameters.size(); i++)
     {
         ParameterCollection* params = savedDataStreamParameters[i];
@@ -617,7 +692,6 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
         // matching ID --> perfect match
         if (params->owner.streamId == stream->getStreamId())
         {
-            // std::cout << "Found matching ID: " << params->owner.streamId << std::endl;
             return i;
         }
     }
@@ -626,13 +700,9 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
     {
         ParameterCollection* params = savedDataStreamParameters[i];
 
-        //std::cout << params->owner.name << std::endl;
-
         // matching name --> this is a good sign
         if (params->owner.name.equalsIgnoreCase (stream->getName()))
         {
-            //std::cout << "Found matching name." << std::endl;
-
             bool betterMatch = false;
 
             for (auto otherStream : dataStreams)
@@ -640,13 +710,11 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
                 if (otherStream != stream && params->owner.streamId == otherStream->getStreamId())
                 {
                     betterMatch = true;
-                    // std::cout << "...but found another stream with matching ID" << std::endl;
                 }
             }
 
             if (! betterMatch)
             {
-                //std::cout << "And it's the best match." << std::endl;
                 return i;
             }
             else
@@ -658,16 +726,12 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
     {
         ParameterCollection* params = savedDataStreamParameters[i];
 
-        //std::cout << params->owner.name << std::endl;
-
         if (! stream->hasDevice())
             continue;
 
         // matching name --> this is a good sign
         if (params->owner.deviceName.equalsIgnoreCase (stream->device->getName()))
         {
-            // std::cout << "Found matching device." << std::endl;
-
             bool betterMatch = false;
 
             for (auto otherStream : dataStreams)
@@ -675,13 +739,11 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
                 if (otherStream != stream && params->owner.name.equalsIgnoreCase (otherStream->getName()))
                 {
                     betterMatch = true;
-                    // std::cout << "...but found another stream with matching name" << std::endl;
                 }
             }
 
             if (! betterMatch)
             {
-                //std::cout << "And it's the best match." << std::endl;
                 return i;
             }
             else
@@ -698,8 +760,6 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
         // matching channels and sample rate --> this is pretty good
         if (params->owner.sample_rate == stream->getSampleRate() && params->owner.channel_count == stream->getChannelCount())
         {
-            // std::cout << "Found matching sample rate + channel count." << std::endl;
-
             bool betterMatch = false;
 
             for (auto otherStream : dataStreams)
@@ -707,13 +767,11 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
                 if (otherStream != stream && otherStream->getName().equalsIgnoreCase (params->owner.name))
                 {
                     betterMatch = true;
-                    //std::cout << "...but found another stream with matching name" << std::endl;
                 }
             }
 
             if (! betterMatch)
             {
-                //std::cout << "And it's the best match." << std::endl;
                 return i;
             }
             else
@@ -728,8 +786,6 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
         // only sample rate match --> still use it
         if (params->owner.sample_rate == stream->getSampleRate())
         {
-            //std::cout << "Found matching sample rate." << std::endl;
-
             bool betterMatch = false;
 
             for (auto otherStream : dataStreams)
@@ -737,13 +793,11 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
                 if (otherStream != stream && params->owner.sample_rate == otherStream->getSampleRate() && params->owner.channel_count == otherStream->getChannelCount())
                 {
                     betterMatch = true;
-                    //std::cout << "...but found another stream with matching sample rate and channel count" << std::endl;
                 }
             }
 
             if (! betterMatch)
             {
-                //std::cout << "And it's the best match." << std::endl;
                 return i;
             }
             else
@@ -752,7 +806,6 @@ int GenericProcessor::findMatchingStreamParameters (DataStream* stream)
     }
 
     // no match found
-
     return -1;
 }
 
@@ -852,9 +905,6 @@ void GenericProcessor::update()
 
     clearSettings();
 
-    // processorInfo.reset();
-    // processorInfo = std::unique_ptr<ProcessorInfoObject>(new ProcessorInfoObject(this));
-
     if (! isMerger()) // only has one source
     {
         if (sourceNode != nullptr && ! sourceNode->isEmpty())
@@ -905,12 +955,9 @@ void GenericProcessor::update()
         }
         else if (! isEmpty())
         {
-            // connect first processor in signal chain to message center
-            // messageChannel.reset();
             const EventChannel* originalChannel = AccessClass::getMessageCenter()->getMessageChannel();
             EventChannel* newChannel = new EventChannel (*originalChannel);
             messageChannel.reset (newChannel);
-            // messageChannel = std::make_unique<EventChannel>(originalChannel);
             messageChannel->addProcessor (this);
             messageChannel->setDataStream (AccessClass::getMessageCenter()->getMessageStream());
 
@@ -957,8 +1004,6 @@ void GenericProcessor::update()
 
         if (stream->numParameters() == 0)
         {
-            //std::cout << "No parameters found, adding..." << std::endl;
-
             for (auto param : dataStreamParameters)
             {
                 if (param->getType() == Parameter::BOOLEAN_PARAM)
@@ -1045,8 +1090,6 @@ void GenericProcessor::update()
                 }
             }
         }
-
-        // LOGC( "Stream ", stream->getStreamId(), " - ", stream->getName(), " num channels: ", stream->getChannelCount(), " num parameters: ", stream->numParameters());
 
         if (savedDataStreamParameters.size() > 0)
         {
@@ -1219,7 +1262,7 @@ void GenericProcessor::setTimestampAndSamples (int64 sampleNumber,
                                                                 m_initialProcessTime,
                                                                 syncStreamId);
 
-    m_currentMidiBuffer->addEvent (data, int(dataSize), 0);
+    m_currentMidiBuffer->addEvent (data, int (dataSize), 0);
 
     //since the processor generating the timestamp won't get the event, add it to the map
     startTimestampsForBlock[streamId] = timestamp;
@@ -1262,9 +1305,6 @@ int GenericProcessor::processEventBuffer()
                 double startTimestamp = *reinterpret_cast<const double*> (dataptr + 16);
                 uint32 nSamples = *reinterpret_cast<const uint32*> (dataptr + 24);
                 int64 initialTicks = *reinterpret_cast<const int64*> (dataptr + 28);
-
-                // if (startSamplesForBlock[sourceStreamId] > startSample)
-                //    std::cout << "GET: " << getNodeId() << " " << sourceStreamId << " " << startSamplesForBlock[sourceStreamId] << " " << startSample << std::endl;
 
                 startSamplesForBlock[sourceStreamId] = startSample;
                 startTimestampsForBlock[sourceStreamId] = startTimestamp;
@@ -1358,7 +1398,7 @@ void GenericProcessor::addEvent (const Event* event, int sampleNum)
 
     event->serialize (buffer, size);
 
-    m_currentMidiBuffer->addEvent (buffer, int(size), sampleNum >= 0 ? sampleNum : 0);
+    m_currentMidiBuffer->addEvent (buffer, int (size), sampleNum >= 0 ? sampleNum : 0);
 
     if (event->getBaseType() == Event::Type::PROCESSOR_EVENT)
     {
@@ -1463,7 +1503,7 @@ void GenericProcessor::addSpike (const Spike* spike)
 
     spike->serialize (buffer, size);
 
-    m_currentMidiBuffer->addEvent (buffer, int(size), 0);
+    m_currentMidiBuffer->addEvent (buffer, int (size), 0);
 }
 
 void GenericProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& eventBuffer)
@@ -1477,8 +1517,7 @@ void GenericProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer& eve
 
     process (buffer);
 
-    if (! headlessMode)
-        latencyMeter->setLatestLatency (processStartTimes);
+    latencyMeter->setLatestLatency (processStartTimes, headlessMode);
 }
 
 Array<const EventChannel*> GenericProcessor::getEventChannels()
@@ -1688,6 +1727,17 @@ const EventChannel* GenericProcessor::getEventChannel (int globalIndex) const
         return nullptr;
 }
 
+File GenericProcessor::getPluginRecordingDirectory()
+{
+    return File (
+        CoreServices::getRecordingParentDirectory().getFullPathName()
+        + File::getSeparatorString()
+        + CoreServices::getRecordingDirectoryBaseText()
+        + File::getSeparatorString()
+        + getName() + " "
+        + String (getNodeId()));
+}
+
 void GenericProcessor::saveToXml (XmlElement* xml)
 {
     xml->setAttribute ("nodeId", nodeId);
@@ -1715,32 +1765,6 @@ void GenericProcessor::saveToXml (XmlElement* xml)
 
         for (auto param : stream->getParameters())
             param->toXml (streamParamsXml);
-
-        /*for (auto eventChannel : stream->getEventChannels())
-        {
-            if (eventChannel->numParameters() > 0)
-            {
-                XmlElement* eventParamsXml = streamXml->createNewChildElement("EVENT_CHANNEL");
-                eventParamsXml->setAttribute("name",eventChannel->getName());
-                eventParamsXml->setAttribute("description", eventChannel->getDescription());
-                
-                for (auto param : eventChannel->getParameters())
-                    param->toXml(eventParamsXml);
-            }
-        }
-        
-        for (auto continuousChannel : stream->getContinuousChannels())
-        {
-            if (continuousChannel->numParameters() > 0)
-            {
-                XmlElement* continuousParamsXml = streamXml->createNewChildElement("CONTINUOUS_CHANNEL");
-                continuousParamsXml->setAttribute("name",continuousChannel->getName());
-                continuousParamsXml->setAttribute("description", continuousChannel->getDescription());
-                
-                for (auto param : continuousChannel->getParameters())
-                    param->toXml(continuousParamsXml);
-            }
-        }*/
     }
 
     saveCustomParametersToXml (xml->createNewChildElement ("CUSTOM_PARAMETERS"));
@@ -1915,18 +1939,6 @@ void GenericProcessor::loadFromXml()
                             continue;
 
                         parameterValueChanged (param);
-
-                        //LOGD("Stream: ", stream->getName());
-                        /*
-                        if (param->getName() == "enable_stream" && isFilter())
-                        {
-                            if(!headlessMode) {
-                                getEditor()->streamEnabledStateChanged(stream->getStreamId(),
-                                                                       (bool)param->getValue(),
-                                                                       true);
-                            }
-                        }
-                         */
                     }
 
                     savedDataStreamParameters.remove (index);
@@ -2077,57 +2089,4 @@ GenericProcessor::DefaultEventInfo::DefaultEventInfo()
       length (0),
       sampleRate (44100)
 {
-}
-
-LatencyMeter::LatencyMeter (GenericProcessor* processor_)
-    : processor (processor_),
-      counter (0)
-{
-}
-
-void LatencyMeter::update (Array<const DataStream*> dataStreams)
-{
-    latencies.clear();
-
-    for (auto dataStream : dataStreams)
-        latencies[dataStream->getStreamId()].insertMultiple (0, 0, 5);
-}
-
-void LatencyMeter::setLatestLatency (std::map<uint16, juce::int64>& processStartTimes)
-{
-    if (counter % 10 == 0) // update latency estimate every 10 process blocks
-    {
-        std::map<uint16, juce::int64>::iterator it = processStartTimes.begin();
-
-        int64 currentTime = Time::getHighResolutionTicks();
-
-        while (it != processStartTimes.end())
-        {
-            latencies[it->first].set (counter % 5, int(currentTime - it->second));
-            it++;
-        }
-
-        if (counter % 50 == 0) // compute mean latency every 50 process blocks
-        {
-            std::map<uint16, juce::int64>::iterator it = processStartTimes.begin();
-
-            while (it != processStartTimes.end())
-            {
-                float totalLatency = 0.0f;
-
-                for (int i = 0; i < 10; i++)
-                    totalLatency += float (latencies[it->first][i]);
-
-                totalLatency = totalLatency
-                               / float (Time::getHighResolutionTicksPerSecond())
-                               * 1000.0f;
-
-                processor->getEditor()->setMeanLatencyMs (it->first, totalLatency);
-
-                it++;
-            }
-        }
-    }
-
-    counter++;
 }

@@ -25,7 +25,6 @@
 #define __BANDPASSFILTER_H_CED428E__
 
 #include <ProcessorHeaders.h>
-
 #include <DspLib.h>
 
 #define CHANNELS_PER_THREAD 32

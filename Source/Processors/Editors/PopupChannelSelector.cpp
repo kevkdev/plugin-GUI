@@ -37,8 +37,6 @@ ChannelButton::ChannelButton (int _id, PopupChannelSelector* _parent) : Button (
 
 void ChannelButton::mouseDown (const MouseEvent& event)
 {
-    parent->startDragCoords.setX (event.x + this->getX());
-    parent->startDragCoords.setY (event.y + this->getY());
     parent->firstButtonSelectedState = ! this->getToggleState();
     parent->mouseDown (event);
 }
@@ -116,12 +114,16 @@ RangeEditor::RangeEditor (const String& name, const Font& font) : TextEditor (na
     setFont (font);
 }
 
-PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelector::Listener* listener_, std::vector<bool> channelStates)
-    : PopupComponent (parent), listener (listener_), nChannels (int(channelStates.size())), mouseDragged (false), startDragCoords (0, 0), shiftKeyDown (false), firstButtonSelectedState (false), isDragging (false), editable (true), maxSelectable (-1)
+PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelector::Listener* listener_, std::vector<bool> channelStates, Array<String> channelNames, const String& title_)
+    : PopupComponent (parent), listener (listener_), nChannels (int (channelStates.size())), mouseDragged (false), startDragCoords (0, 0), shiftKeyDown (false), firstButtonSelectedState (false), isDragging (false), editable (true), maxSelectable (-1), title (title_)
 {
     int nColumns;
 
-    if (nChannels <= 512)
+    if (nChannels <= 8)
+    {
+        nColumns = 8;
+    }
+    else if (nChannels <= 512)
     {
         nColumns = 16;
     }
@@ -148,7 +150,18 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
 
     buttonColour = Colours::azure;
 
-    auto contentComponent = std::make_unique<Component>();
+    contentComponent = std::make_unique<Component>();
+
+    if (channelNames.isEmpty() || channelNames.size() != nChannels)
+    {
+        channelNames.clear();
+        for (int i = 0; i < nChannels; i++)
+        {
+            channelNames.add ("CH" + String (i + 1));
+        }
+    }
+
+    // Create buttons for each channel. Use actual channel names as tooltips.
     for (int i = 0; i < nRows; i++)
     {
         for (int j = 0; j < nColumns; j++)
@@ -158,6 +171,7 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
                 auto* button = new ChannelButton (nColumns * i + j, this);
                 button->setBounds (width / nColumns * j, height / nRows * i, buttonSize, buttonSize);
                 button->setToggleState (channelStates[nColumns * i + j], NotificationType::dontSendNotification);
+                button->setTooltip (channelNames[nColumns * i + j]);
                 button->addListener (this);
                 contentComponent->addAndMakeVisible (button);
 
@@ -171,16 +185,18 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
 
     if (editable)
     {
+        float widthScaling = nChannels > 8 ? 0.25 : 0.5;
+
         // Add "SELECT ALL" button
         auto* selectAllButton = new SelectButton ("ALL");
-        selectAllButton->setBounds (0, height, 0.25 * width, width / nColumns);
+        selectAllButton->setBounds (0, height, widthScaling * width, width / nColumns);
         selectAllButton->addListener (this);
         contentComponent->addAndMakeVisible (selectAllButton);
         selectButtons.add (selectAllButton);
 
         // Add "SELECT NONE" button
         auto* selectNoneButton = new SelectButton ("NONE");
-        selectNoneButton->setBounds (0.25 * width, height, 0.25 * width, width / nColumns);
+        selectNoneButton->setBounds (widthScaling * width, height, widthScaling * width, width / nColumns);
         selectNoneButton->addListener (this);
         contentComponent->addAndMakeVisible (selectNoneButton);
         selectButtons.add (selectNoneButton);
@@ -196,6 +212,7 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
 
             // Add Range Editor
             rangeEditor = std::make_unique<RangeEditor> ("Range", FontOptions (12.0f));
+            rangeEditor->setInputRestrictions (0, "0123456789:");
             rangeEditor->setBounds (0.75 * width, height, 0.25 * width, width / nColumns);
             rangeEditor->addListener (this);
             contentComponent->addAndMakeVisible (rangeEditor.get());
@@ -207,7 +224,7 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
     int scrollBarThickness = 15;
 
     viewport = std::make_unique<Viewport>();
-    viewport->setViewedComponent (contentComponent.release(), true);
+    viewport->setViewedComponent (contentComponent.get(), false);
     viewport->setScrollBarsShown (true, false);
     viewport->setScrollBarThickness (scrollBarThickness);
 
@@ -222,13 +239,31 @@ PopupChannelSelector::PopupChannelSelector (Component* parent, PopupChannelSelec
         viewport->setSize (width, height + (editable ? buttonSize : 0));
     }
 
-    setSize (viewport->getWidth(), viewport->getHeight());
-    setColour (ColourSelector::backgroundColourId, Colours::transparentBlack);
+    if (title.isNotEmpty())
+    {
+        setSize (viewport->getWidth(), viewport->getHeight() + 24);
+    }
+    else
+    {
+        setSize (viewport->getWidth(), viewport->getHeight());
+    }
+
+    startDragCoords = Point<int> (-1, -1);
 }
 
 void PopupChannelSelector::resized()
 {
-    viewport->setBounds (getLocalBounds());
+    viewport->setBounds (0, getHeight() - viewport->getHeight(), getWidth(), viewport->getHeight());
+}
+
+void PopupChannelSelector::paint (Graphics& g)
+{
+    if (title.isNotEmpty())
+    {
+        g.setFont (FontOptions ("Inter", "Regular", 15.0f));
+        g.setColour (findColour (ThemeColours::controlPanelText));
+        g.drawFittedText (title, 5, 0, getWidth() - 10, 20, Justification::centredLeft, 1.0f);
+    }
 }
 
 void PopupChannelSelector::updatePopup()
@@ -273,19 +308,27 @@ void PopupChannelSelector::mouseMove (const MouseEvent& event)
 void PopupChannelSelector::mouseDown (const MouseEvent& event)
 {
     if (editable)
+    {
         selectedButtons.clear();
+        startDragCoords = event.getEventRelativeTo (contentComponent.get()).getPosition();
+    }
 }
 
 void PopupChannelSelector::mouseDrag (const MouseEvent& event)
 {
     if (editable)
     {
-        mouseDragged = true;
+        MouseEvent e = event.getEventRelativeTo (contentComponent.get());
 
-        int w = event.getDistanceFromDragStartX();
-        int h = event.getDistanceFromDragStartY();
+        int w = e.getDistanceFromDragStartX();
+        int h = e.getDistanceFromDragStartY();
         int x = startDragCoords.getX();
         int y = startDragCoords.getY();
+
+        if (x < 0 || y < 0)
+            return;
+
+        mouseDragged = true;
 
         if (w < 0)
         {
@@ -359,6 +402,8 @@ void PopupChannelSelector::modifierKeysChanged (const ModifierKeys& modifiers)
 
 void PopupChannelSelector::mouseUp (const MouseEvent& event)
 {
+    bool mouseClicked = false;
+
     if (! mouseDragged && editable)
     {
         for (auto button : channelButtons)
@@ -385,11 +430,17 @@ void PopupChannelSelector::mouseUp (const MouseEvent& event)
                     activeChannels.add (button->getId());
                 }
 
+                mouseClicked = true;
+
                 break;
             }
         }
     }
-    listener->channelStateChanged (activeChannels);
+
+    if (mouseClicked || mouseDragged)
+        listener->channelStateChanged (activeChannels);
+
+    startDragCoords = Point<int> (-1, -1);
     mouseDragged = false;
 }
 

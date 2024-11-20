@@ -63,7 +63,7 @@ static void errorMsg (const char* file, int line, const char* msg)
     if (dw)
     {
         FormatMessage (
-            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK,
             NULL,
             dw,
             0,
@@ -120,6 +120,7 @@ PluginManager::PluginManager()
         }
         AddDllDirectory (installSharedPath.getFullPathName().toWideCharPointer());
     }
+    SetDefaultDllDirectories (LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
 
 #elif __linux__
     File installSharedPath = File::getSpecialLocation (File::userApplicationDataDirectory)
@@ -217,7 +218,7 @@ void PluginManager::loadPlugins (const File& pluginPath)
 
         if (res < 0)
         {
-            LOGE (foundDLLs[i].getFileName(), " Load FAILED");
+            LOGE (foundDLLs[i].getFileName(), " Load FAILED!\n");
         }
         else
         {
@@ -229,7 +230,7 @@ void PluginManager::loadPlugins (const File& pluginPath)
 /*
 	 Takes the user-specified plugin and begins
 	 dynamic loading process. We want to ensure that
-	 no step is exectured without a checkpoint
+	 no step is executed without a checkpoint
 	 because dynamic loading calls for rellocation of RAM
 	 and works inside the same POSIX thread as the GUI.
  */

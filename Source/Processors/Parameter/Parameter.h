@@ -323,7 +323,7 @@ public:
         /** Called when the parameter is destroyed */
         virtual void removeParameter (Parameter* parameterToRemove) = 0;
 
-        /** Called when the parameter is enabled/disbaled */
+        /** Called when the parameter is enabled/disabled */
         virtual void parameterEnabled (bool isEnabled) = 0;
     };
 
@@ -336,8 +336,14 @@ public:
     /** Broadcasts a value change to all listeners */
     void valueChanged();
 
+    /** Links this parameter to another parameter */
+    void linkParameter (Parameter* first, Parameter* second = nullptr);
+
+    /** Returns true if this parameter is linked to another parameter */
+    bool isLinked() { return linkedParameters.size() > 0; }
+
     /** Makes it possible to undo value changes */
-    class ChangeValue : public UndoableAction
+    class PLUGIN_API ChangeValue : public UndoableAction
     {
     public:
         /** Constructor */
@@ -387,6 +393,7 @@ private:
     bool isEnabledFlag;
 
     Array<Listener*> parameterListeners;
+    Array<Parameter*> linkedParameters;
 };
 
 /** 
@@ -638,6 +645,7 @@ public:
                              const String& description,
                              Array<String> streamNames,
                              const int defaultIndex,
+                             bool syncWithStreamSelector = false,
                              bool deactivateDuringAcquisition = true);
 
     /** Sets the current value*/
@@ -651,6 +659,9 @@ public:
 
     /** Gets the value as an integer*/
     int getSelectedIndex();
+
+    // Returns true if the parameter should sync with GenericEditor's StreamSelector
+    bool shouldSyncWithStreamSelector() { return syncWithStreamSelector; }
 
     /** Gets the value as a string**/
     String getValueAsString() override;
@@ -667,6 +678,7 @@ public:
 private:
     Array<String> streamNames;
     int streamIndex;
+    bool syncWithStreamSelector;
 };
 
 /**
@@ -797,7 +809,7 @@ private:
 *
     Represents a Parameter that holds value of currently selected line in a given Event Channel.
 
-    (Optional) The maximum number of avaialble lines
+    (Optional) The maximum number of available lines
                can be specified.
 
 */
@@ -868,7 +880,7 @@ public:
                    const String& name,
                    const String& displayName,
                    const String& description,
-                   const String& defaultValue,
+                   const File& defaultValue,
                    const StringArray& filePatternsAllowed,
                    const bool isDirectory,
                    bool deactivateDuringAcquisition = true);
@@ -1029,7 +1041,7 @@ private:
 /** 
 * 
     Represents a Parameter that is only used for change notification.
-    E.g. to notify the processor that a certain event has occured.
+    E.g. to notify the processor that a certain event has occurred.
 */
 class PLUGIN_API NotificationParameter : public Parameter
 {
@@ -1042,7 +1054,7 @@ public:
                            const String& description,
                            bool deactivateDuringAcquisition = false);
 
-    /** Notifies the processor that a certain event has occured by calling parameterValueChanged() */
+    /** Notifies the processor that a certain event has occurred by calling parameterValueChanged() */
     void triggerNotification();
 
     /** Stages a value, to be changed by the processor*/

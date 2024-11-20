@@ -23,6 +23,7 @@
 
 #include "FileReader.h"
 #include "FileReaderEditor.h"
+#include "FileReaderActions.h"
 
 #include "../../AccessClass.h"
 #include "../../Audio/AudioComponent.h"
@@ -51,8 +52,16 @@ FileReader::FileReader() : GenericProcessor ("File Reader"),
                            m_sysSampleRate (44100),
                            playbackActive (true),
                            gotNewFile (true),
-                           loopPlayback (true)
+                           loopPlayback (true),
+                           sampleRateWarningShown (false)
 {
+    /* Define a default file location based on OS */
+#ifdef __APPLE__
+    defaultFile = File::getSpecialLocation (File::currentApplicationFile).getChildFile ("Contents/Resources/resources").getChildFile ("structure.oebin");
+#else
+    defaultFile = File::getSpecialLocation (File::currentApplicationFile).getParentDirectory().getChildFile ("resources").getChildFile ("structure.oebin");
+#endif
+
     /* Add built-in file source (Binary Format) */
     supportedExtensions.set ("oebin", 1);
 
@@ -99,18 +108,22 @@ FileReader::~FileReader()
 
 void FileReader::registerParameters()
 {
-    addPathParameter (Parameter::PROCESSOR_SCOPE, "selected_file", "Selected File", "File to load data from", "default", getSupportedExtensions(), false);
+    /* Add parameters */
+    addPathParameter (Parameter::PROCESSOR_SCOPE, "selected_file", "Selected File", "File to load data from", defaultFile, getSupportedExtensions(), false);
     addSelectedStreamParameter (Parameter::PROCESSOR_SCOPE, "active_stream", "Active Stream", "Currently active stream", {}, 0);
-    addTimeParameter (Parameter::PROCESSOR_SCOPE, "start_time", "Start Time", "Time to start playback", "00:00:00");
-    addTimeParameter (Parameter::PROCESSOR_SCOPE, "end_time", "Stop Time", "Time to end playback", "00:00:00");
+    addTimeParameter (Parameter::PROCESSOR_SCOPE, "start_time", "Start Time", "Time to start playback");
+    addTimeParameter (Parameter::PROCESSOR_SCOPE, "end_time", "Stop Time", "Time to end playback");
+
+    /* Link parameters -- start_time and end_time valid range depends on selected_file */
+    linkParameters (getParameter ("selected_file"), getParameter ("start_time"), getParameter ("end_time"));
 }
 
 void FileReader::parameterValueChanged (Parameter* p)
 {
     if (p->getName() == "selected_file")
     {
-        //Check if file exists and is supported
-        setFile (p->getValue());
+        setFile (p->getValue(), false);
+        //handled by handleLinkedParameterChange
     }
     else if (p->getName() == "active_stream")
     {
@@ -156,6 +169,25 @@ void FileReader::parameterValueChanged (Parameter* p)
     }
 }
 
+void FileReader::handleLinkedParameterChange (Parameter* param, var newValue)
+{
+    if (param->getName() == "selected_file")
+    {
+        // Parent parameter 
+        PathParameter* pathParam = static_cast<PathParameter*> (param);
+
+        // Linked parameters
+        TimeParameter* startTime = static_cast<TimeParameter*>(getParameter("start_time"));
+        TimeParameter* endTime = static_cast<TimeParameter*>(getParameter("end_time"));
+        CategoricalParameter* activeStream = static_cast<CategoricalParameter*>(getParameter("active_stream"));
+
+        // Linked action
+        SelectFile* action = new SelectFile (this, pathParam, newValue, activeStream, startTime, endTime);
+        CoreServices::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        CoreServices::getUndoManager()->perform ((UndoableAction*) action);
+    }
+}
+
 AudioProcessorEditor* FileReader::createEditor()
 {
     editor = std::make_unique<FileReaderEditor> (this);
@@ -171,15 +203,7 @@ void FileReader::initialize (bool signalChainIsLoading)
     if (isEnabled)
         return;
 
-    File executable = File::getSpecialLocation (File::currentApplicationFile);
-#ifdef __APPLE__
-    defaultFile = executable.getChildFile ("Contents/Resources/resources").getChildFile ("structure.oebin");
-#else
-    defaultFile = executable.getParentDirectory().getChildFile ("resources").getChildFile ("structure.oebin");
-#endif
-
-    if (defaultFile.exists())
-        setFile (defaultFile.getFullPathName(), false);
+    setFile (defaultFile.getFullPathName(), false);
 }
 
 bool FileReader::setFile (String fullpath, bool shouldUpdateSignalChain)
@@ -200,6 +224,7 @@ bool FileReader::setFile (String fullpath, bool shouldUpdateSignalChain)
         }
     }
 
+    //Open file
     File file (fullpath);
 
     String ext = file.getFileExtension().toLowerCase().substring (1);
@@ -251,8 +276,7 @@ bool FileReader::setFile (String fullpath, bool shouldUpdateSignalChain)
 
     gotNewFile = true;
 
-    setActiveStream (0, true);
-
+    //Set available streams
     Array<String> streamNames;
     for (int i = 0; i < input->getNumRecords(); ++i)
         streamNames.add (input->getRecordName (i));
@@ -260,9 +284,77 @@ bool FileReader::setFile (String fullpath, bool shouldUpdateSignalChain)
     SelectedStreamParameter* activeStreamParam = (SelectedStreamParameter*) getParameter ("active_stream");
     activeStreamParam->setStreamNames (streamNames);
     activeStreamParam->setNextValue (0, false);
-    parameterValueChanged (activeStreamParam);
+
+    //Set active stream
+    setActiveStream (0, true);
+
+    //Set max time on time parameters
+    TimeParameter* startTime = static_cast<TimeParameter*> (getParameter ("start_time"));
+    startTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples - 1));
+
+    TimeParameter* endTime = static_cast<TimeParameter*> (getParameter ("end_time"));
+    endTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
+
+    //Set initial values on time parameters
+    endTime->setNextValue (TimeParameter::TimeValue (1000 * stopSample / input->getActiveSampleRate()).toString(), false);
 
     return true;
+}
+
+void FileReader::setActiveStream (int index, bool reset)
+{
+    //Resets the stream to the beginning if reset flag is true
+    //If reset true, this means sample rate / num channels / num samples could all have changed
+
+    if (! input)
+    {
+        return;
+    }
+
+    //TODO: Change to setActiveStream
+    input->setActiveRecord (index);
+
+    currentNumChannels = input->getActiveNumChannels();
+    currentNumTotalSamples = input->getActiveNumSamples();
+    currentSampleRate = input->getActiveSampleRate();
+
+    /*
+    TimeParameter* startTime = static_cast<TimeParameter*> (getParameter ("start_time"));
+    startTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
+
+    TimeParameter* endTime = static_cast<TimeParameter*> (getParameter ("end_time"));
+    endTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
+    */
+
+    //Check if currentSample is within bounds of new stream
+    if (currentSample > currentNumTotalSamples)
+        reset = true;
+
+    //TODO: Also need to check if currentSample
+    if (reset)
+    {
+        startSample = 0;
+        stopSample = currentNumTotalSamples;
+        bufferCacheWindow = 0;
+        loopCount = 0;
+
+        /*
+        startTime->getTimeValue()->setTimeFromMilliseconds (0);
+        startTime->setNextValue (startTime->getTimeValue()->toString(), false);
+
+        endTime->getTimeValue()->setTimeFromMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
+        endTime->setNextValue (endTime->getTimeValue()->toString(), false);
+        */
+    }
+
+    channelInfo.clear();
+    for (int i = 0; i < currentNumChannels; ++i)
+        channelInfo.add (input->getChannelInfo (index, i));
+
+    input->seekTo (startSample);
+
+    updateSettings();
+    CoreServices::updateSignalChain (this);
 }
 
 void FileReader::togglePlayback()
@@ -319,58 +411,6 @@ bool FileReader::isFileSupported (const String& fileName) const
     String ext = file.getFileExtension().toLowerCase().substring (1);
 
     return supportedExtensions[ext] - 1 >= 0;
-}
-
-void FileReader::setActiveStream (int index, bool reset)
-{
-    //Resets the stream to the beginning if reset flag is true
-    //If reset true, this means sample rate / num channels / num samples could all have changed
-
-    if (! input)
-    {
-        return;
-    }
-
-    //TODO: Change to setActiveStream
-    input->setActiveRecord (index);
-
-    currentNumChannels = input->getActiveNumChannels();
-    currentNumTotalSamples = input->getActiveNumSamples();
-    currentSampleRate = input->getActiveSampleRate();
-
-    TimeParameter* startTime = static_cast<TimeParameter*> (getParameter ("start_time"));
-    startTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
-
-    TimeParameter* endTime = static_cast<TimeParameter*> (getParameter ("end_time"));
-    endTime->getTimeValue()->setMaxTimeInMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
-
-    //Check if currentSample is within bounds of new stream
-    if (currentSample > currentNumTotalSamples)
-        reset = true;
-
-    //TODO: Also need to check if currentSample
-    if (reset)
-    {
-        startSample = 0;
-        stopSample = currentNumTotalSamples;
-        bufferCacheWindow = 0;
-        loopCount = 0;
-
-        startTime->getTimeValue()->setTimeFromMilliseconds (0);
-        startTime->setNextValue (startTime->getTimeValue()->toString(), false);
-
-        endTime->getTimeValue()->setTimeFromMilliseconds (samplesToMilliseconds (currentNumTotalSamples));
-        endTime->setNextValue (endTime->getTimeValue()->toString(), false);
-    }
-
-    channelInfo.clear();
-    for (int i = 0; i < currentNumChannels; ++i)
-        channelInfo.add (input->getChannelInfo (index, i));
-
-    input->seekTo (startSample);
-
-    updateSettings();
-    CoreServices::updateSignalChain (this);
 }
 
 int64 FileReader::getCurrentSample()
@@ -452,11 +492,12 @@ void FileReader::updateSettings()
         for (int i = 0; i < currentNumChannels; i++)
         {
             ContinuousChannel::Settings channelSettings {
-                ContinuousChannel::Type::ELECTRODE,
+                static_cast<ContinuousChannel::Type>(channelInfo[i].type),
                 channelInfo[i].name,
                 "description",
                 "filereader.stream",
                 channelInfo[i].bitVolts, // BITVOLTS VALUE
+
                 dataStreams.getLast()
             };
 
@@ -490,7 +531,7 @@ void FileReader::updateSettings()
 
     isEnabled = true;
 
-    /* Set the timestamp to start of playback and reset loop counter */
+    /* Set the sample to start of playback and reset loop counter */
     playbackSamplePos = startSample;
     loopCount = 0;
 
@@ -500,8 +541,32 @@ void FileReader::updateSettings()
     adm.getAudioDeviceSetup (ads);
     m_sysSampleRate = ads.sampleRate;
     m_bufferSize = ads.bufferSize;
+
+    if (m_sysSampleRate < 44100.0)
+    {
+        if (! sampleRateWarningShown)
+        {
+            LOGE ("File Reader: Sample rate is less than 44100 Hz. Disabling processor.");
+
+            if (! headlessMode)
+            {
+                AlertWindow::showMessageBox (AlertWindow::WarningIcon,
+                                             "[File Reader] Invalid Sample Rate",
+                                             "The sample rate of the audio device is less than 44.1 kHz. File Reader is disabled."
+                                             "\n\nTry adjusting the sample rate in the audio settings by clicking the 'Latency' button in the Control Panel "
+                                             "and setting it to 44.1 kHz or higher. After making this change, please remove and re-add the File Reader to the signal chain.");
+            }
+
+            sampleRateWarningShown = true;
+        }
+
+        isEnabled = false;
+        return;
+    }
+
     if (m_bufferSize == 0)
         m_bufferSize = 1024;
+
     m_samplesPerBuffer.set (m_bufferSize * (getDefaultSampleRate() / m_sysSampleRate));
 
     bufferA.malloc (currentNumChannels * m_bufferSize * BUFFER_WINDOW_CACHE_SIZE);
@@ -602,7 +667,7 @@ void FileReader::process (AudioBuffer<float>& buffer)
 
     if (! playbackActive && playbackSamplePos + samplesNeededPerBuffer > stopSample)
     {
-        samplesNeededPerBuffer = int(stopSample - playbackSamplePos);
+        samplesNeededPerBuffer = int (stopSample - playbackSamplePos);
         switchNeeded = true;
     }
     else
@@ -618,13 +683,23 @@ void FileReader::process (AudioBuffer<float>& buffer)
 
     //std::cout << "Reading " << samplesNeededPerBuffer << " samples. " << std::endl;
 
-    for (int i = 0; i < currentNumChannels; ++i)
+    const float* tempReadBuffer = readBuffer->getData() + (samplesNeededPerBuffer * currentNumChannels * bufferCacheWindow);
+
+    for (int ch = 0; ch < currentNumChannels; ++ch)
     {
+        float* writeBuffer = buffer.getWritePointer (ch);
+
+        for (int sample = 0; sample < samplesNeededPerBuffer; sample++)
+        {
+            *(writeBuffer + sample) = *(tempReadBuffer + (currentNumChannels * sample) + ch);
+        }
+
+        // DEPRECATED:
         // offset readBuffer index by current cache window count * buffer window size * num channels
-        input->processChannelData (*readBuffer + (samplesNeededPerBuffer * currentNumChannels * bufferCacheWindow),
-                                   buffer.getWritePointer (i, 0),
-                                   i,
-                                   samplesNeededPerBuffer);
+        //input->processChannelData (*readBuffer + (samplesNeededPerBuffer * currentNumChannels * bufferCacheWindow),
+        //                           buffer.getWritePointer (i, 0),
+        //                           i,
+        //                           samplesNeededPerBuffer);
     }
 
     setTimestampAndSamples (playbackSamplePos, -1.0, samplesNeededPerBuffer, dataStreams[0]->getStreamId()); //TODO: Look at this
@@ -656,19 +731,19 @@ void FileReader::addEventsInRange (int64 start, int64 stop)
 
     for (int i = 0; i < events.channels.size(); i++)
     {
-        int64 absoluteCurrentTimestamp = events.timestamps[i] + loopCount * (stopSample - startSample);
+        int64 absoluteCurrentSampleNumber = events.sampleNumbers[i] + loopCount * (stopSample - startSample);
         if (events.text.size() && ! events.text[i].isEmpty())
         {
             String msg = events.text[i];
-            LOGD ("Broadcasting message: ", msg, " at timestamp: ", absoluteCurrentTimestamp, " channel: ", events.channels[i]);
+            LOGD ("File read broadcasting message: ", msg, " at sample number: ", absoluteCurrentSampleNumber, " channel: ", events.channels[i]);
             broadcastMessage (msg);
         }
         else
         {
             uint8 ttlBit = events.channels[i];
             bool state = events.channelStates[i] > 0;
-            TTLEventPtr event = TTLEvent::createTTLEvent (eventChannels[0], events.timestamps[i], ttlBit, state);
-            addEvent (event, int(absoluteCurrentTimestamp));
+            TTLEventPtr event = TTLEvent::createTTLEvent (eventChannels[0], events.sampleNumbers[i], ttlBit, state);
+            addEvent (event, int (absoluteCurrentSampleNumber));
         }
     }
 }
@@ -694,12 +769,12 @@ void FileReader::switchBuffer()
     notify();
 }
 
-HeapBlock<int16>* FileReader::getFrontBuffer()
+HeapBlock<float>* FileReader::getFrontBuffer()
 {
     return readBuffer;
 }
 
-HeapBlock<int16>* FileReader::getBackBuffer()
+HeapBlock<float>* FileReader::getBackBuffer()
 {
     if (readBuffer == &bufferA)
         return &bufferB;
@@ -720,7 +795,7 @@ void FileReader::run()
     }
 }
 
-void FileReader::readAndFillBufferCache (HeapBlock<int16>& cacheBuffer)
+void FileReader::readAndFillBufferCache (HeapBlock<float>& cacheBuffer)
 {
     const int samplesNeededPerBuffer = m_samplesPerBuffer.get();
     const int samplesNeeded = samplesNeededPerBuffer * BUFFER_WINDOW_CACHE_SIZE;
@@ -735,7 +810,7 @@ void FileReader::readAndFillBufferCache (HeapBlock<int16>& cacheBuffer)
         // if reached end of file stream
         if ((currentSample + samplesToRead) > stopSample)
         {
-            samplesToRead = int(stopSample - currentSample);
+            samplesToRead = int (stopSample - currentSample);
             if (samplesToRead > 0)
                 input->readData (cacheBuffer + samplesRead * currentNumChannels, samplesToRead);
 

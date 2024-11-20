@@ -37,7 +37,7 @@ class PopupManager;
 
 namespace CoreServices
 {
-/** Issues a signal chain update; this should be called whenver a plugin's
+/** Issues a signal chain update; this should be called whenever a plugin's
 * are changed in a way that would affect downstream plugins.
 * 
 * For example, if a plugin adds a new EventChannel, updateSignalChain() must
@@ -137,6 +137,15 @@ PLUGIN_API Array<int> getAvailableRecordNodeIds();
 
 /** Returns true if all record nodes are in a "synchronized" state*/
 PLUGIN_API bool allRecordNodesAreSynchronized();
+
+/** Returns a pointer to a processor based off Id, returns nullptr if not found*/
+PLUGIN_API GenericProcessor* getProcessorById (uint16_t nodeId);
+
+/** Returns a pointer to a processor based off name, returns nullptr if not found*/
+PLUGIN_API GenericProcessor* getProcessorByName (String processorName, bool onlySearchSources = false);
+
+/** Returns IDs for all processors upstream of a given node */
+PLUGIN_API std::vector<int> getPredecessorProcessorIds (GenericProcessor* node);
 
 namespace RecordNode
 {

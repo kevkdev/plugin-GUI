@@ -25,6 +25,7 @@
 #define __RECORDCONTROL_H_120DD434__
 
 #include "RecordControlEditor.h"
+
 #include <ProcessorHeaders.h>
 
 /**

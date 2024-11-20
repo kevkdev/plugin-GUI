@@ -43,7 +43,8 @@ namespace LfpViewer
     associated LfpChannelDisplay waveform on or off.
  */
 class LfpChannelDisplayInfo : public LfpChannelDisplay,
-                              public Button::Listener
+                              public Button::Listener,
+                              public TooltipClient
 {
     friend class LfpDisplay;
 
@@ -75,6 +76,9 @@ public:
     /** Updates the position of this component*/
     void updateXY (float, float);
 
+    /** Updates the mean and RMS values of the channel */
+    void updateMeanAndRMS();
+
     /** Sets whether this channel is in single-channel mode */
     void setSingleChannelState (bool);
 
@@ -94,6 +98,9 @@ private:
     bool isSingleChannel;
     float x, y;
 
+    float rms;
+    float mean;
+
     int samplerate;
     int subProcessorIdx;
 
@@ -101,6 +108,8 @@ private:
 
     bool channelTypeStringIsVisible;
     bool channelNumberHidden;
+
+    Path pointerPath;
 
     /** Get/set whether enabled button is visible*/
     void setEnabledButtonVisibility (bool shouldBeVisible);
@@ -113,6 +122,8 @@ private:
     /** Get/set whether channel number is hidden */
     void setChannelNumberIsHidden (bool shouldBeHidden);
     bool isChannelNumberHidden();
+
+    String getTooltip() override;
 };
 
 }; // namespace LfpViewer

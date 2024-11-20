@@ -23,6 +23,7 @@
 
 #include "MainWindow.h"
 #include "AutoUpdater.h"
+#include "UI/ConsoleViewer.h"
 #include "UI/EditorViewport.h"
 #include "UI/UIComponent.h"
 #include "Utils/OpenEphysHttpServer.h"
@@ -50,6 +51,8 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
     customLookAndFeel = std::make_unique<CustomLookAndFeel>();
     LookAndFeel::setDefaultLookAndFeel (customLookAndFeel.get());
 
+    ConsoleViewer* consoleViewer = nullptr;
+
     if (! isConsoleApp)
     {
         documentWindow = std::make_unique<MainDocumentWindow>();
@@ -58,6 +61,11 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
                                       false); // useBottomCornerRisizer -- doesn't work very well
 
         documentWindow->setLookAndFeel (customLookAndFeel.get());
+
+        // Create a console viewer for the GUI (not for the headless version and debug builds)
+#ifdef NDEBUG
+        consoleViewer = new ConsoleViewer();
+#endif
     }
     else
     {
@@ -77,7 +85,9 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
 
     OELogger::instance().createLogFile (activityLog.getFullPathName().toStdString());
 
-    std::cout << "Session Start Time: " << Time::getCurrentTime().toString (true, true, true, true) << std::endl;
+    std::cout << "------------------------------------------------" << std::endl;
+    std::cout << "\tSession Start Time: " << Time::getCurrentTime().toString (true, true, true, true) << std::endl;
+    std::cout << "------------------------------------------------" << std::endl;
     std::cout << std::endl;
     LOGC ("Open Ephys GUI v", JUCEApplication::getInstance()->getApplicationVersion(), " (Plugin API v", PLUGIN_API_VER, ")");
     LOGC (SystemStats::getJUCEVersion());
@@ -93,11 +103,11 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
     // Create ProcessorGraph and AudioComponent, and connect them.
     // Callbacks will be set by the play button in the control panel
 
-    LOGD ("Creating processor graph...");
-    processorGraph = std::make_unique<ProcessorGraph> (isConsoleApp);
-
     LOGD ("Creating audio component...");
     audioComponent = std::make_unique<AudioComponent>();
+
+    LOGD ("Creating processor graph...");
+    processorGraph = std::make_unique<ProcessorGraph> (isConsoleApp);
 
     LOGD ("Connecting audio component to processor graph...");
     audioComponent->connectToProcessorGraph (processorGraph.get());
@@ -108,7 +118,7 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
     if (! isConsoleApp)
     {
         LOGD ("Creating UI component...");
-        documentWindow->setContentOwned (new UIComponent (this, processorGraph.get(), audioComponent.get(), controlPanel.get(), customLookAndFeel.get()), true);
+        documentWindow->setContentOwned (new UIComponent (this, processorGraph.get(), audioComponent.get(), controlPanel.get(), consoleViewer, customLookAndFeel.get()), true);
 
         UIComponent* ui = (UIComponent*) documentWindow->getContentComponent();
 
@@ -127,15 +137,20 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
 
         documentWindow->addKeyListener (commandManager.getKeyMappings());
 
-        LOGD ("Loading window bounds.");
         loadWindowBounds();
 
-        // Use native title bar on Mac and Linux
-        documentWindow->setUsingNativeTitleBar (true);
+#ifdef JUCE_WINDOWS
+        documentWindow->setUsingNativeTitleBar (false);
+#ifdef NDEBUG
+        ShowWindow (GetConsoleWindow(), SW_HIDE);
+#endif
+#else
+        documentWindow->setUsingNativeTitleBar (true); // Use native title bar on Mac and Linux
+#endif
 
-        documentWindow->addToDesktop (documentWindow->getDesktopWindowStyleFlags()); // prevents the maximize
-            // button from randomly disappearing
+        documentWindow->addToDesktop();
         documentWindow->setVisible (true);
+        documentWindow->toFront (true);
 
         // Constraining the window's size doesn't seem to work:
         documentWindow->setResizeLimits (800, 600, 10000, 10000);
@@ -149,8 +164,6 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
         if (auto peer = documentWindow->getPeer())
             peer->setIcon (windowIcon);
 #endif
-
-        popupManager = std::make_unique<PopupManager>();
     }
 
     controlPanel->updateRecordEngineList();
@@ -208,13 +221,6 @@ MainWindow::MainWindow (const File& fileToLoad, bool isConsoleApp_) : isConsoleA
                 }
             }
         }
-    }
-
-    if (! isConsoleApp)
-    {
-        UIComponent* ui = (UIComponent*) documentWindow->getContentComponent();
-        ui->addInfoTab();
-        ui->addGraphTab();
     }
 
     http_server_thread = std::make_unique<OpenEphysHttpServer> (processorGraph.get());
@@ -285,23 +291,23 @@ void MainWindow::disableHttpServer()
     http_server_thread->stop();
 }
 
-void MainWindow::repaint()
+void MainWindow::repaintWindow()
 {
     if (! isConsoleApp)
     {
-        documentWindow->repaint();
+        // Repaint all TopLevelWindows (including the MainDocumentWindow)
+        for (int i = 0; i < TopLevelWindow::getNumTopLevelWindows(); i++)
+        {
+            TopLevelWindow* window = TopLevelWindow::getTopLevelWindow (i);
 
-        auto windowBounds = documentWindow->getBounds();
-
-        documentWindow->setBounds (windowBounds.reduced (1));
-
-        if (auto menuBarComp = documentWindow->getMenuBarComponent())
-            menuBarComp->repaint();
+            if (window != nullptr)
+            {
+                window->sendLookAndFeelChange();
+            }
+        }
 
         Colour c = documentWindow->getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
         documentWindow->setBackgroundColour (c);
-
-        documentWindow->setBounds (windowBounds);
     }
 }
 
@@ -400,8 +406,8 @@ void MainWindow::saveWindowBounds()
     XmlElement* bounds = new XmlElement ("BOUNDS");
     bounds->setAttribute ("x", documentWindow->getScreenX());
     bounds->setAttribute ("y", documentWindow->getScreenY());
-    bounds->setAttribute ("w", documentWindow->getContentComponent()->getWidth());
-    bounds->setAttribute ("h", documentWindow->getContentComponent()->getHeight());
+    bounds->setAttribute ("w", documentWindow->getWidth());
+    bounds->setAttribute ("h", documentWindow->getHeight());
     bounds->setAttribute ("fullscreen", documentWindow->isFullScreen());
 
     xml->addChildElement (bounds);

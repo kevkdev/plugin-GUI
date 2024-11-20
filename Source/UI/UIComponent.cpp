@@ -30,6 +30,7 @@
 #include "../MainWindow.h"
 #include "../Processors/MessageCenter/MessageCenter.h"
 #include "../Processors/ProcessorGraph/ProcessorGraph.h"
+#include "ConsoleViewer.h"
 #include "ControlPanel.h"
 #include "DataViewport.h"
 #include "EditorViewport.h"
@@ -42,6 +43,7 @@ UIComponent::UIComponent (MainWindow* mainWindow_,
                           ProcessorGraph* processorGraph_,
                           AudioComponent* audioComponent_,
                           ControlPanel* controlPanel_,
+                          ConsoleViewer* consoleViewer_,
                           CustomLookAndFeel* customLookAndFeel_)
     : mainWindow (mainWindow_),
       processorGraph (processorGraph_),
@@ -57,6 +59,8 @@ UIComponent::UIComponent (MainWindow* mainWindow_,
 
     graphViewer = new GraphViewer();
     LOGD ("Created graph viewer.");
+
+    consoleViewer.reset (consoleViewer_);
 
     dataViewport = new DataViewport();
     addChildComponent (dataViewport);
@@ -97,6 +101,10 @@ UIComponent::UIComponent (MainWindow* mainWindow_,
 
     getProcessorList()->fillItemList();
 
+    addInfoTab();
+    addGraphTab();
+    addConsoleTab();
+
     popupManager = std::make_unique<PopupManager>();
 }
 
@@ -108,6 +116,11 @@ UIComponent::~UIComponent()
     {
         pluginInstaller->setVisible (false);
         delete pluginInstaller;
+    }
+
+    if (consoleWindow)
+    {
+        consoleWindow->removeListener (this);
     }
 
     // setLookAndFeel(nullptr);
@@ -377,13 +390,7 @@ void UIComponent::setTheme (ColourTheme t)
     customLookAndFeel->setTheme (t);
 
     mainWindow->currentTheme = t;
-    mainWindow->repaint();
-
-    controlPanel->updateColours();
-
-    messageCenterButton.updateColours();
-
-    infoLabel->updateColours();
+    mainWindow->repaintWindow();
 
     getProcessorGraph()->refreshColours();
 
@@ -411,6 +418,43 @@ void UIComponent::addGraphTab()
         dataViewport->addTab ("Graph", graphViewer->getGraphViewport(), 1);
         graphViewerIsOpen = true;
     }
+}
+
+void UIComponent::addConsoleTab()
+{
+    if (consoleViewer != nullptr && ! consoleOpenInTab)
+    {
+        if (consoleOpenInWindow)
+        {
+            consoleWindow->closeButtonPressed();
+        }
+
+        dataViewport->addTab ("Console", consoleViewer.get(), 2);
+        consoleOpenInTab = true;
+    }
+}
+
+void UIComponent::openConsoleWindow()
+{
+    if (consoleWindow == nullptr)
+    {
+        consoleWindow = std::make_unique<DataWindow> (nullptr, "Open Ephys GUI Console");
+        consoleWindow->addListener (this);
+        consoleWindow->setLookAndFeel (customLookAndFeel);
+        consoleWindow->setBackgroundColour (findColour (ThemeColours::windowBackground));
+        consoleWindow->setSize (700, 700);
+    }
+
+    if (consoleOpenInTab)
+    {
+        dataViewport->removeTab (2);
+        consoleOpenInTab = false;
+    }
+
+    consoleWindow->setContentNonOwned (consoleViewer.get(), false);
+    consoleWindow->setVisible (true);
+    consoleWindow->toFront (true);
+    consoleOpenInWindow = true;
 }
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -464,9 +508,13 @@ PopupMenu UIComponent::getMenuForIndex (int menuIndex, const String& menuName)
     }
     else if (menuIndex == 2)
     {
-        PopupMenu clockMenu;
-        clockMenu.addCommandItem (commandManager, setClockModeDefault);
-        clockMenu.addCommandItem (commandManager, setClockModeHHMMSS);
+        PopupMenu clockModeMenu;
+        clockModeMenu.addCommandItem (commandManager, setClockModeDefault);
+        clockModeMenu.addCommandItem (commandManager, setClockModeHHMMSS);
+
+        PopupMenu clockReferenceTimeMenu;
+        clockReferenceTimeMenu.addCommandItem (commandManager, setClockReferenceTimeCumulative);
+        clockReferenceTimeMenu.addCommandItem (commandManager, setClockReferenceTimeAcqStart);
 
         PopupMenu themeMenu;
         themeMenu.addCommandItem (commandManager, setColourThemeLight);
@@ -478,9 +526,11 @@ PopupMenu UIComponent::getMenuForIndex (int menuIndex, const String& menuName)
         menu.addCommandItem (commandManager, toggleFileInfo);
         menu.addCommandItem (commandManager, toggleInfoTab);
         menu.addCommandItem (commandManager, toggleGraphViewer);
+        menu.addCommandItem (commandManager, toggleConsoleViewer);
         menu.addCommandItem (commandManager, showMessageWindow);
         menu.addSeparator();
-        menu.addSubMenu ("Clock mode", clockMenu);
+        menu.addSubMenu ("Clock display mode", clockModeMenu);
+        menu.addSubMenu ("Clock reference time", clockReferenceTimeMenu);
         menu.addSeparator();
         menu.addSubMenu ("Theme", themeMenu);
         menu.addSeparator();
@@ -538,9 +588,12 @@ void UIComponent::getAllCommands (Array<CommandID>& commands)
                               toggleFileInfo,
                               toggleInfoTab,
                               toggleGraphViewer,
+                              toggleConsoleViewer,
                               showMessageWindow,
                               setClockModeDefault,
                               setClockModeHHMMSS,
+                              setClockReferenceTimeCumulative,
+                              setClockReferenceTimeAcqStart,
                               showHelp,
                               checkForUpdates,
                               resizeWindow,
@@ -606,16 +659,22 @@ void UIComponent::getCommandInfo (CommandID commandID, ApplicationCommandInfo& r
             break;
 
         case undo:
+        {
             result.setInfo ("Undo", "Undo the last action.", "General", 0);
             result.addDefaultKeypress ('Z', ModifierKeys::commandModifier);
-            result.setActive (! acquisitionStarted && AccessClass::getProcessorGraph()->getUndoManager()->canUndo() && ! getEditorViewport()->isSignalChainLocked());
+            bool undoDisabled = acquisitionStarted && AccessClass::getUndoManager()->getUndoDescription().contains ("Disabled during acquisition");
+            result.setActive (! undoDisabled && AccessClass::getUndoManager()->canUndo() && ! getEditorViewport()->isSignalChainLocked());
             break;
+        }
 
         case redo:
+        {
             result.setInfo ("Redo", "Undo the last action.", "General", 0);
             result.addDefaultKeypress ('Z', ModifierKeys::commandModifier | ModifierKeys::shiftModifier);
-            result.setActive (! acquisitionStarted && AccessClass::getProcessorGraph()->getUndoManager()->canRedo() && ! getEditorViewport()->isSignalChainLocked());
+            bool redoDisabled = acquisitionStarted && AccessClass::getUndoManager()->getRedoDescription().contains ("Disabled during acquisition");
+            result.setActive (! redoDisabled && AccessClass::getUndoManager()->canRedo() && ! getEditorViewport()->isSignalChainLocked());
             break;
+        }
 
         case copySignalChain:
             result.setInfo ("Copy", "Copy selected processors.", "General", 0);
@@ -672,6 +731,15 @@ void UIComponent::getCommandInfo (CommandID commandID, ApplicationCommandInfo& r
             result.setTicked (graphViewerIsOpen);
             break;
 
+        case toggleConsoleViewer:
+            result.setInfo ("Console", "Show/hide built-in console.", "General", 0);
+            result.addDefaultKeypress ('C', ModifierKeys::shiftModifier);
+            result.setTicked (consoleOpenInTab || consoleOpenInWindow);
+#ifdef DEBUG
+            result.setActive (false);
+#endif
+            break;
+
         case showMessageWindow:
             result.setInfo ("Message Window", "Show Message Window.", "General", 0);
             result.addDefaultKeypress ('M', ModifierKeys::shiftModifier);
@@ -686,6 +754,16 @@ void UIComponent::getCommandInfo (CommandID commandID, ApplicationCommandInfo& r
         case setClockModeHHMMSS:
             result.setInfo ("HH:MM:SS", "Set clock mode to HH:MM:SS.", "General", 0);
             result.setTicked (controlPanel->clock->getMode() == Clock::HHMMSS);
+            break;
+
+        case setClockReferenceTimeCumulative:
+            result.setInfo ("Cumulative", "Set clock reference time to cumulative.", "General", 0);
+            result.setTicked (controlPanel->clock->getReferenceTime() == Clock::CUMULATIVE);
+            break;
+
+        case setClockReferenceTimeAcqStart:
+            result.setInfo ("Acquisition start", "Set clock to reset when acquisition starts.", "General", 0);
+            result.setTicked (controlPanel->clock->getReferenceTime() == Clock::ACQUISITION_START);
             break;
 
         case setColourThemeLight:
@@ -965,6 +1043,25 @@ bool UIComponent::perform (const InvocationInfo& info)
 
             break;
 
+        case toggleConsoleViewer:
+        {
+            if (consoleViewer == nullptr)
+                break;
+
+            if (consoleOpenInTab)
+                dataViewport->removeTab (2);
+            else if (consoleOpenInWindow)
+            {
+                consoleWindow->closeButtonPressed();
+            }
+            else
+            {
+                addConsoleTab();
+            }
+
+            break;
+        }
+
         case showMessageWindow:
             messageWindow = std::make_unique<MessageWindow>();
 
@@ -984,6 +1081,14 @@ bool UIComponent::perform (const InvocationInfo& info)
 
         case setClockModeHHMMSS:
             controlPanel->clock->setMode (Clock::HHMMSS);
+            break;
+
+        case setClockReferenceTimeCumulative:
+            controlPanel->clock->setReferenceTime (Clock::CUMULATIVE);
+            break;
+
+        case setClockReferenceTimeAcqStart:
+            controlPanel->clock->setReferenceTime (Clock::ACQUISITION_START);
             break;
 
         case setColourThemeLight:
@@ -1048,6 +1153,12 @@ void UIComponent::saveStateToXml (XmlElement* xml)
     XmlElement* uiComponentState = xml->createNewChildElement ("UICOMPONENT");
     uiComponentState->setAttribute ("isProcessorListOpen", processorList->isOpen());
     uiComponentState->setAttribute ("isEditorViewportOpen", showHideEditorViewportButton->getToggleState());
+    uiComponentState->setAttribute ("consoleOpenInWindow", consoleOpenInWindow);
+
+    if (consoleOpenInWindow)
+    {
+        uiComponentState->setAttribute ("consoleWindowBounds", consoleWindow->getWindowStateAsString());
+    }
 }
 
 void UIComponent::loadStateFromXml (XmlElement* xml)
@@ -1063,6 +1174,14 @@ void UIComponent::loadStateFromXml (XmlElement* xml)
         }
 
         showHideEditorViewportButton->setToggleState (isEditorViewportOpen, sendNotification);
+
+        bool consoleWindowState = xmlNode->getBoolAttribute ("consoleOpenInWindow");
+
+        if (consoleWindowState)
+        {
+            openConsoleWindow();
+            consoleWindow->restoreWindowStateFromString (xmlNode->getStringAttribute ("consoleWindowBounds"));
+        }
     }
 }
 
@@ -1074,6 +1193,14 @@ Array<String> UIComponent::getRecentlyUsedFilenames()
 void UIComponent::setRecentlyUsedFilenames (const Array<String>& filenames)
 {
     controlPanel->setRecentlyUsedFilenames (filenames);
+}
+
+void UIComponent::windowClosed (const String& windowName)
+{
+    if (windowName == consoleWindow->getName())
+    {
+        consoleOpenInWindow = false;
+    }
 }
 
 Component* UIComponent::findComponentByIDRecursive (Component* parent, const String& componentID)

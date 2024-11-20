@@ -25,8 +25,8 @@
 #define __ARDUINOOUTPUT_H_F7BDA585__
 
 #include <ProcessorHeaders.h>
-#include <SerialLib.h>
 
+#include <SerialLib.h>
 #include "serial/ofArduino.h"
 
 /**

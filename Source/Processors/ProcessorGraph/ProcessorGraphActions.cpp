@@ -240,7 +240,7 @@ DeleteProcessor::~DeleteProcessor()
 
 bool DeleteProcessor::perform()
 {
-    LOGDD ("Peforming DELETE for processor ", nodeId);
+    LOGDD ("Performing DELETE for processor ", nodeId);
 
     Array<GenericProcessor*> processorToDelete;
 
@@ -312,19 +312,9 @@ MoveProcessor::MoveProcessor (GenericProcessor* processor,
         originalSourceNodeId = -1;
 
     if (processor->getDestNode() != nullptr)
-    {
         originalDestNodeId = processor->getDestNode()->getNodeId();
-
-        if (processor->getDestNode()->getDestNode() != nullptr)
-            originalDestNodeDestNodeId = processor->getDestNode()->getDestNode()->getNodeId();
-        else
-            originalDestNodeDestNodeId = -1;
-    }
     else
-    {
         originalDestNodeId = -1;
-        originalDestNodeDestNodeId = -1;
-    }
 
     if (sourceNode != nullptr)
         newSourceNodeId = sourceNode->getNodeId();
@@ -332,9 +322,19 @@ MoveProcessor::MoveProcessor (GenericProcessor* processor,
         newSourceNodeId = -1;
 
     if (destNode != nullptr)
+    {
         newDestNodeId = destNode->getNodeId();
+
+        if (destNode->getSourceNode() != nullptr)
+            newDestNodeSourceNodeId = destNode->getSourceNode()->getNodeId();
+        else
+            newDestNodeSourceNodeId = -1;
+    }
     else
+    {
         newDestNodeId = -1;
+        newDestNodeSourceNodeId = -1;
+    }
 }
 
 MoveProcessor::~MoveProcessor()
@@ -343,7 +343,7 @@ MoveProcessor::~MoveProcessor()
 
 bool MoveProcessor::perform()
 {
-    LOGDD ("Peforming MOVE for processor ", nodeId);
+    LOGDD ("Performing MOVE for processor ", nodeId);
 
     GenericProcessor* processor = processorGraph->getProcessorWithNodeId (nodeId);
 
@@ -372,16 +372,14 @@ bool MoveProcessor::undo()
     processorGraph->moveProcessor (processor,
                                    sourceProcessor,
                                    destProcessor,
-                                   moveDownstream);
+                                   ! moveDownstream);
 
-    if (processor->isSource() && originalDestNodeDestNodeId > -1)
+    if (processor->isSource() && newDestNodeSourceNodeId > -1)
     {
-        GenericProcessor* originalDest = processorGraph->getProcessorWithNodeId (originalDestNodeDestNodeId);
+        GenericProcessor* newDest = processorGraph->getProcessorWithNodeId (newDestNodeId);
+        GenericProcessor* newDestOrigSource = processorGraph->getProcessorWithNodeId (newDestNodeSourceNodeId);
 
-        processorGraph->moveProcessor (originalDest,
-                                       destProcessor,
-                                       originalDest->getDestNode(),
-                                       moveDownstream);
+        processorGraph->reconnectProcessors (newDestNodeSourceNodeId, newDestNodeId);
     }
 
     return true;

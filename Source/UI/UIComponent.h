@@ -27,11 +27,12 @@
 #include "../../JuceLibraryCode/JuceHeader.h"
 
 #include "../Processors/MessageCenter/MessageCenterEditor.h"
+#include "../Processors/Visualization/DataWindow.h"
 #include "CustomArrowButton.h"
 #include "DefaultConfig.h"
-#include "MessageWindow.h"
 #include "LookAndFeel/CustomLookAndFeel.h"
 #include "MessageCenterButton.h"
+#include "MessageWindow.h"
 #include "PluginInstaller.h"
 
 class MainWindow;
@@ -42,11 +43,13 @@ class ProcessorGraph;
 class AudioComponent;
 class GraphViewer;
 class InfoLabel;
+class ConsoleViewer;
 class DataViewport;
 class EditorViewport;
 class SignalChainTabComponent;
 class DefaultConfigWindow;
 class PopupManager;
+class DataWindow;
 
 /**
 
@@ -65,9 +68,8 @@ class UIComponent : public Component,
                     public MenuBarModel,
                     public ApplicationCommandTarget,
                     public Button::Listener,
-                    public DragAndDropContainer // required for
-// drag-and-drop
-// internal components
+                    public DragAndDropContainer,
+                    public DataWindow::Listener
 
 {
 public:
@@ -76,6 +78,7 @@ public:
                  ProcessorGraph* pgraph,
                  AudioComponent* audio,
                  ControlPanel* controlPanel,
+                 ConsoleViewer* consoleViewer,
                  CustomLookAndFeel* customLookAndFeel);
 
     /** Destructor */
@@ -113,7 +116,7 @@ public:
 
     /** Called by the MessageCenterButton */
     void buttonClicked (Button* button);
-    
+
     /** Stops the callbacks to the ProcessorGraph which drive data acquisition. */
     void disableCallbacks();
 
@@ -170,14 +173,33 @@ public:
     // Adds the graph tab to the DataViewport if it is not already open
     void addGraphTab();
 
+    // Adds the console viewer to the DataViewport if it is not already open
+    void addConsoleTab();
+
+    // Opens the console viewer in a separate window
+    void openConsoleWindow();
+
     /** Notifies the UI component when the graph viewer is closed */
     void closeGraphViewer() { graphViewerIsOpen = false; }
 
     /** Notifies the UI component when the info tab is closed */
     void closeInfoTab() { infoTabIsOpen = false; }
 
+    /** Notifies the UI component when the console viewer tab is closed */
+    void closeConsoleViewer() { consoleOpenInTab = false; }
+
+    /** Returns true if the console viewer is open */
+    bool isConsoleOpen () { return consoleOpenInTab || consoleOpenInWindow; }
+
+    /** Notifies the UI component when the console viewer window is closed */
+    void windowClosed (const String& windowName) override;
+
     /** Finds a child component based on a unique component ID */
     Component* findComponentByIDRecursive (Component* parent, const String& id);
+
+    /** Resizes all of components inside the UIComponent to fit the new boundaries
+    of the MainWindow, or to account for opening/closing events.*/
+    void resized();
 
 private:
     ScopedPointer<DataViewport> dataViewport;
@@ -186,9 +208,13 @@ private:
     ScopedPointer<ProcessorList> processorList;
     ScopedPointer<InfoLabel> infoLabel;
     ScopedPointer<GraphViewer> graphViewer;
+    std::unique_ptr<ConsoleViewer> consoleViewer;
+    std::unique_ptr<DataWindow> consoleWindow;
 
     bool infoTabIsOpen = false;
     bool graphViewerIsOpen = false;
+    bool consoleOpenInTab = false;
+    bool consoleOpenInWindow = false;
 
     EditorViewport* editorViewport;
 
@@ -222,10 +248,6 @@ private:
     /** Pointer to the GUI's MessageCenterEditor. Owned by the MessageCenter. */
     MessageCenterEditor* messageCenterEditor;
 
-    /** Resizes all of components inside the UIComponent to fit the new boundaries
-    of the MainWindow, or to account for opening/closing events.*/
-    void resized();
-
     /** Contains codes for common user commands to which the application must react.*/
     enum CommandIDs
     {
@@ -241,9 +263,12 @@ private:
         toggleFileInfo = 0x2010,
         toggleInfoTab = 0x2011,
         toggleGraphViewer = 0x2012,
-        showMessageWindow = 0x2013,
+        toggleConsoleViewer = 0x2013,
+        showMessageWindow = 0x2014,
         setClockModeDefault = 0x2111,
         setClockModeHHMMSS = 0x2112,
+        setClockReferenceTimeCumulative = 0x2113,
+        setClockReferenceTimeAcqStart = 0x2114,
         toggleHttpServer = 0x4001,
         showHelp = 0x2211,
         checkForUpdates = 0x2222,

@@ -137,6 +137,12 @@ void Parameter::setOwner (ParameterOwner* parameterOwner_)
     Parameter::registerParameter (this);
 }
 
+void Parameter::linkParameter (Parameter* child1, Parameter* child2)
+{
+    linkedParameters.add (child1);
+    linkedParameters.add (child2);
+}
+
 void Parameter::setEnabled (bool enabled)
 {
     isEnabledFlag = enabled;
@@ -229,7 +235,7 @@ bool Parameter::ChangeValue::perform()
 {
     Parameter* p = Parameter::parameterMap[key];
 
-    if (! p->isEnabled())
+    if (! p->isEnabled() || p->currentValue == newValue)
         return false;
 
     p->newValue = newValue;
@@ -237,9 +243,10 @@ bool Parameter::ChangeValue::perform()
 
     p->valueChanged();
 
-    p->logValueChange();
-
-    return true;
+    if (p->currentValue == p->previousValue)
+        return false;
+    else
+        return true;
 }
 
 bool Parameter::ChangeValue::undo()
@@ -251,7 +258,7 @@ bool Parameter::ChangeValue::undo()
 
     p->valueChanged();
 
-    p->logValueChange();
+    //p->logValueChange();
 
     return true;
 }
@@ -284,10 +291,22 @@ void BooleanParameter::setNextValue (var newValue_, bool undoable)
         newValue = newValue_;
     }
 
-    ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 bool BooleanParameter::getBoolValue()
@@ -344,15 +363,30 @@ CategoricalParameter::CategoricalParameter (ParameterOwner* owner,
 
 void CategoricalParameter::setNextValue (var newValue_, bool undoable)
 {
-    if (newValue_ == currentValue)
+    if (newValue_ == currentValue
+        || ! newValue_.isInt()
+        || (int) newValue_ < 0
+        || (int) newValue_ >= categories.size())
         return;
 
     newValue = (int) newValue_;
 
-    ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 int CategoricalParameter::getSelectedIndex()
@@ -438,10 +472,22 @@ void IntParameter::setNextValue (var newValue_, bool undoable)
     else
         newValue = value;
 
-    ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 int IntParameter::getIntValue()
@@ -482,7 +528,7 @@ StringParameter::StringParameter (ParameterOwner* owner,
                                   String defaultValue_,
                                   bool deactivateDuringAcquisition)
     : Parameter (owner,
-                 ParameterType::INT_PARAM,
+                 ParameterType::STRING_PARAM,
                  scope,
                  name,
                  displayName,
@@ -499,10 +545,22 @@ void StringParameter::setNextValue (var newValue_, bool undoable)
 
     newValue = newValue_.toString();
 
-    ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 String StringParameter::getStringValue()
@@ -570,12 +628,24 @@ void FloatParameter::setNextValue (var newValue_, bool undoable)
             newValue = value;
     }
 
-    if (currentValue != newValue)
+    if (currentValue == newValue)
+        return;
+
+    if (undoable)
     {
         ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-        AccessClass::getUndoManager()->beginNewTransaction();
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
         AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
     }
 }
 
@@ -628,12 +698,13 @@ SelectedChannelsParameter::SelectedChannelsParameter (ParameterOwner* owner,
       maxSelectableChannels (maxSelectableChannels_),
       channelCount (0)
 {
-    if (defaultValue_.size() == 0)
+    if (defaultValue_.size() == 0 && maxSelectableChannels != std::numeric_limits<int>::max())
     {
         //Set default selected to the first maxSelectableChannels channels
         Array<var> values;
         for (int i = 0; i < maxSelectableChannels; i++)
             values.add (i);
+
         currentValue = values;
     }
     else
@@ -663,10 +734,22 @@ void SelectedChannelsParameter::setNextValue (var newValue_, bool undoable)
         return;
     }
 
-    Parameter::ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        Parameter::ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 std::vector<bool> SelectedChannelsParameter::getChannelStates()
@@ -782,7 +865,7 @@ Array<var> SelectedChannelsParameter::parseSelectedString (const String& input)
 
 void SelectedChannelsParameter::setChannelCount (int newCount)
 {
-    if (channelCount > newCount && parameterOwner->getType() != ParameterOwner::SPIKE_CHANNEL)
+    if (newCount > 0 && channelCount > newCount)
     {
         Array<var> values;
         for (int i = 0; i < currentValue.getArray()->size(); i++)
@@ -838,10 +921,22 @@ void MaskChannelsParameter::setNextValue (var newValue_, bool undoable)
 
     newValue = values;
 
-    Parameter::ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+    if (undoable)
+    {
+        Parameter::ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-    AccessClass::getUndoManager()->beginNewTransaction();
-    AccessClass::getUndoManager()->perform (action);
+        if (shouldDeactivateDuringAcquisition())
+            AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+        else
+            AccessClass::getUndoManager()->beginNewTransaction();
+
+        AccessClass::getUndoManager()->perform (action);
+    }
+    else
+    {
+        getOwner()->parameterChangeRequest (this);
+        valueChanged();
+    }
 }
 
 std::vector<bool> MaskChannelsParameter::getChannelStates()
@@ -1034,10 +1129,22 @@ void TtlLineParameter::setNextValue (var newValue_, bool undoable)
     {
         newValue = newValue_;
 
-        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+        if (undoable)
+        {
+            ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-        AccessClass::getUndoManager()->beginNewTransaction();
-        AccessClass::getUndoManager()->perform (action);
+            if (shouldDeactivateDuringAcquisition())
+                AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+            else
+                AccessClass::getUndoManager()->beginNewTransaction();
+
+            AccessClass::getUndoManager()->perform (action);
+        }
+        else
+        {
+            getOwner()->parameterChangeRequest (this);
+            valueChanged();
+        }
     }
 }
 
@@ -1074,7 +1181,7 @@ PathParameter::PathParameter (ParameterOwner* owner,
                               const String& name,
                               const String& displayName,
                               const String& description,
-                              const String& defaultValue,
+                              const File& defaultValue_,
                               const StringArray& fileExtensions_,
                               bool isDirectory_,
                               bool deactivateDuringAcquisition)
@@ -1084,7 +1191,7 @@ PathParameter::PathParameter (ParameterOwner* owner,
                  name,
                  displayName,
                  description,
-                 defaultValue,
+                 defaultValue_.getFullPathName(),
                  deactivateDuringAcquisition),
       filePatternsAllowed (fileExtensions_),
       isDirectory (isDirectory_)
@@ -1107,11 +1214,27 @@ void PathParameter::setNextValue (var newValue_, bool undoable)
         {
             newValue = newValue_;
         }
+        
+        if (! undoable)
+        {
+            getOwner()->parameterChangeRequest (this);
+            valueChanged();
+        }
+        else if (isLinked())
+        {
+            getOwner()->handleLinkedParameterChange (this, newValue);
+        }
+        else 
+        {
+            ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+            if (shouldDeactivateDuringAcquisition())
+                AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+            else
+                AccessClass::getUndoManager()->beginNewTransaction();
 
-        AccessClass::getUndoManager()->beginNewTransaction();
-        AccessClass::getUndoManager()->perform (action);
+            AccessClass::getUndoManager()->perform (action);
+        }
     }
     else
     {
@@ -1160,6 +1283,7 @@ SelectedStreamParameter::SelectedStreamParameter (ParameterOwner* owner,
                                                   const String& description,
                                                   Array<String> streamNames_,
                                                   int defaultIndex,
+                                                  bool syncWithStreamSelector_,
                                                   bool deactivateDuringAcquisition)
     : Parameter (owner,
                  ParameterType::SELECTED_STREAM_PARAM,
@@ -1169,7 +1293,8 @@ SelectedStreamParameter::SelectedStreamParameter (ParameterOwner* owner,
                  description,
                  defaultIndex,
                  deactivateDuringAcquisition),
-      streamNames (streamNames_)
+      streamNames (streamNames_),
+      syncWithStreamSelector (syncWithStreamSelector_)
 {
 }
 
@@ -1184,10 +1309,22 @@ void SelectedStreamParameter::setNextValue (var newValue_, bool undoable)
     {
         newValue = newValue_;
 
-        ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
+        if (undoable)
+        {
+            ChangeValue* action = new Parameter::ChangeValue (getKey(), newValue);
 
-        AccessClass::getUndoManager()->beginNewTransaction();
-        AccessClass::getUndoManager()->perform (action);
+            if (shouldDeactivateDuringAcquisition())
+                AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+            else
+                AccessClass::getUndoManager()->beginNewTransaction();
+
+            AccessClass::getUndoManager()->perform (action);
+        }
+        else
+        {
+            getOwner()->parameterChangeRequest (this);
+            valueChanged();
+        }
     }
     else
     {
@@ -1212,7 +1349,6 @@ void SelectedStreamParameter::setStreamNames (Array<String> streamNames_)
     {
         getOwner()->parameterChangeRequest (this);
         valueChanged();
-        logValueChange();
     }
 }
 
@@ -1278,7 +1414,11 @@ void TimeParameter::setNextValue (var newValue_, bool undoable)
         {
             ChangeValue* action = new TimeParameter::ChangeValue (getKey(), newValue);
 
-            AccessClass::getUndoManager()->beginNewTransaction();
+            if (shouldDeactivateDuringAcquisition())
+                AccessClass::getUndoManager()->beginNewTransaction ("Disabled during acquisition");
+            else
+                AccessClass::getUndoManager()->beginNewTransaction();
+
             AccessClass::getUndoManager()->perform (action);
         }
         else
@@ -1318,8 +1458,6 @@ bool TimeParameter::ChangeValue::perform()
 
     p->valueChanged();
 
-    p->logValueChange();
-
     return true;
 }
 
@@ -1332,8 +1470,6 @@ bool TimeParameter::ChangeValue::undo()
     p->getOwner()->parameterChangeRequest (p);
 
     p->valueChanged();
-
-    p->logValueChange();
 
     return true;
 }

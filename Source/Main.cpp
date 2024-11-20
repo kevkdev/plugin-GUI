@@ -83,20 +83,9 @@ public:
 
 #ifdef _WIN32
 
-        if (AllocConsole())
-        {
-            freopen ("CONOUT$", "w", stdout);
-            freopen ("CONOUT$", "w", stderr);
-            console_out = std::ofstream ("CONOUT$");
-            std::cout.rdbuf (console_out.rdbuf());
-            std::cerr.rdbuf (console_out.rdbuf());
-            SMALL_RECT windowSize = { 0, 0, 85 - 1, 35 - 1 };
-            COORD bufferSize = { 85, 9999 };
-            HANDLE wHnd = GetStdHandle (STD_OUTPUT_HANDLE);
-            SetConsoleTitle ("Open Ephys GUI ::: Console");
-            SetConsoleWindowInfo (wHnd, true, &windowSize);
-            SetConsoleScreenBufferSize (wHnd, bufferSize);
-        }
+        SetConsoleTitleA ("Open Ephys GUI Launcher");
+
+        std::cout << "Initializing Open Ephys GUI... DO NOT CLOSE THIS WINDOW" << std::endl;
 
         SetConsoleCtrlHandler (ConsoleHandler, TRUE);
 
@@ -121,22 +110,23 @@ public:
             for (auto param : parameters)
             {
                 if (param.equalsIgnoreCase ("--headless"))
+                {
                     isConsoleApp = true;
-
-                else if (File::createLegalFileName (param).equalsIgnoreCase (param))
+                }
+                else if (fileToLoad.getFullPathName().isEmpty())
                 {
                     File localPath (File::getCurrentWorkingDirectory().getChildFile (param));
 
                     if (localPath.existsAsFile())
                     {
                         fileToLoad = localPath;
-                        break;
+                        continue;
                     }
 
-                    //File globalPath(param);
+                    File globalPath (param);
 
-                    //if (globalPath.existsAsFile())
-                    //    fileToLoad = globalPath;
+                    if (globalPath.existsAsFile())
+                        fileToLoad = globalPath;
                 }
             }
 
@@ -209,7 +199,6 @@ public:
 
 private:
     std::unique_ptr<MainWindow> mainWindow;
-    std::ofstream console_out;
 };
 
 //==============================================================================

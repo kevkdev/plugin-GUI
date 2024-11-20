@@ -605,7 +605,19 @@ void SelectedChannelsParameterEditor::buttonClicked (Button* button_)
 
     SelectedChannelsParameter* p = (SelectedChannelsParameter*) param;
 
-    auto* channelSelector = new PopupChannelSelector (button.get(), this, p->getChannelStates());
+    Array<String> channelNames;
+    String popupTitle;
+
+    if (p->getOwner()->getType() == ParameterOwner::DATASTREAM)
+    {
+        DataStream* stream = (DataStream*) p->getOwner();
+        popupTitle = String (stream->getSourceNodeId()) + " " + stream->getSourceNodeName() + " - " + stream->getName();
+
+        for (auto channel : stream->getContinuousChannels())
+            channelNames.add (channel->getName());
+    }
+
+    auto* channelSelector = new PopupChannelSelector (button.get(), this, p->getChannelStates(), channelNames, popupTitle);
 
     channelSelector->setChannelButtonColour (param->getColour());
 
@@ -628,7 +640,7 @@ void SelectedChannelsParameterEditor::updateView()
     else
     {
         button->setEnabled (true);
-        int numChannels = int(((SelectedChannelsParameter*) param)->getChannelStates().size());
+        int numChannels = int (((SelectedChannelsParameter*) param)->getChannelStates().size());
         int selected = 0;
         for (auto chan : ((SelectedChannelsParameter*) param)->getChannelStates())
             if (chan)
@@ -646,7 +658,7 @@ MaskChannelsParameterEditor::MaskChannelsParameterEditor (Parameter* param, int 
 {
     jassert (param->getType() == Parameter::MASK_CHANNELS_PARAM);
 
-    int numChannels = int(((MaskChannelsParameter*) param)->getChannelStates().size());
+    int numChannels = int (((MaskChannelsParameter*) param)->getChannelStates().size());
     int selected = 0;
     for (auto chan : ((MaskChannelsParameter*) param)->getChannelStates())
         if (chan)
@@ -700,7 +712,19 @@ void MaskChannelsParameterEditor::buttonClicked (Button* button_)
 
     std::vector<bool> channelStates = p->getChannelStates();
 
-    auto* channelSelector = new PopupChannelSelector (button.get(), this, channelStates);
+    Array<String> channelNames;
+    String popupTitle;
+
+    if (p->getOwner()->getType() == ParameterOwner::DATASTREAM)
+    {
+        DataStream* stream = (DataStream*) p->getOwner();
+        popupTitle = String (stream->getSourceNodeId()) + " " + stream->getSourceNodeName() + " - " + stream->getName();
+
+        for (auto channel : stream->getContinuousChannels())
+            channelNames.add (channel->getName());
+    }
+
+    auto* channelSelector = new PopupChannelSelector (button.get(), this, channelStates, channelNames, popupTitle);
 
     channelSelector->setChannelButtonColour (param->getColour());
 
@@ -722,7 +746,7 @@ void MaskChannelsParameterEditor::updateView()
     else
     {
         button->setEnabled (true);
-        int numChannels = int(((MaskChannelsParameter*) param)->getChannelStates().size());
+        int numChannels = int (((MaskChannelsParameter*) param)->getChannelStates().size());
         int selected = 0;
         for (auto chan : ((MaskChannelsParameter*) param)->getChannelStates())
             if (chan)
@@ -834,7 +858,6 @@ TtlLineParameterEditor::TtlLineParameterEditor (Parameter* param,
 
     if (syncParam != nullptr)
     {
-        jassert (syncParam != nullptr);
         jassert (syncParam->getType() == Parameter::SELECTED_STREAM_PARAM);
         jassert (syncParam->getScope() == Parameter::ParameterScope::PROCESSOR_SCOPE);
 
@@ -882,6 +905,14 @@ void TtlLineParameterEditor::selectedLineChanged (int newLine)
     updateView();
 }
 
+int TtlLineParameterEditor::getSelectedLine()
+{
+    if (param == nullptr)
+        return -1;
+    else
+        return ((TtlLineParameter*) param)->getSelectedLine();
+}
+
 void TtlLineParameterEditor::primaryStreamChanged()
 {
     if (syncParam == nullptr || syncParam->getType() != Parameter::SELECTED_STREAM_PARAM)
@@ -918,26 +949,24 @@ void TtlLineParameterEditor::buttonClicked (Button* button_)
     {
         DataStream* paramStream = (DataStream*) p->getOwner();
 
-        auto* syncSelector = new SyncLineSelector (this,
+        auto* syncSelector = new SyncLineSelector (button_,
+                                                   this,
                                                    p->getMaxAvailableLines(),
                                                    p->getSelectedLine(),
                                                    paramStream->getKey() == syncParam->getValueAsString());
 
-        CallOutBox& myBox = CallOutBox::launchAsynchronously (std::unique_ptr<Component> (syncSelector),
-                                                              editor->getScreenBounds(),
-                                                              nullptr);
+        CoreServices::getPopupManager()->showPopup (std::unique_ptr<Component> (syncSelector), editor);
     }
     else
     {
-        auto* lineSelector = new SyncLineSelector (this,
+        auto* lineSelector = new SyncLineSelector (button_,
+                                                   this,
                                                    p->getMaxAvailableLines(),
                                                    p->getSelectedLine(),
                                                    true,
                                                    p->canSelectNone());
 
-        CallOutBox& myBox = CallOutBox::launchAsynchronously (std::unique_ptr<Component> (lineSelector),
-                                                              editor->getScreenBounds(),
-                                                              nullptr);
+        CoreServices::getPopupManager()->showPopup (std::unique_ptr<Component> (lineSelector), editor);
     }
 }
 

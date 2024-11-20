@@ -90,7 +90,7 @@ public:
 
     // ------------------------------------------------------------
     //                   VIRTUAL METHODS
-    //       (can optionally be overriden by sub-classes)
+    //       (can optionally be overridden by sub-classes)
     // ------------------------------------------------------------
 
     /** Use this method to save custom editor parameters */
@@ -100,7 +100,7 @@ public:
     virtual void loadVisualizerEditorParameters (XmlElement* xml) {}
 
     /** Called when the Visualizer window is closed */
-    virtual void windowClosed() override {}
+    virtual void windowClosed(const String& name) override {}
 
     /** Called after tab has been closed. */
     void tabWasClosed();
