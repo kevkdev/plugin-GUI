@@ -155,7 +155,7 @@ jobs:
         /usr/bin/ditto -x -k open-ephys.zip open-ephys
         xcrun stapler staple open-ephys/Open\ Ephys\ GUI.app
 
-        zipfile=open-ephys-v1.0.0-alpha.1-mac.zip
+        zipfile=open-ephys-v1.0.0-alpha.2-mac.zip
         /usr/bin/ditto -c -k --sequesterRsrc --keepParent open-ephys $zipfile
         user_info="X-JFrog-Art-Api:$ARTIFACTORY_ACCESS_TOKEN"
         curl -H $user_info -T $zipfile "https://openephys.jfrog.io/artifactory/GUI-binaries/1.0.0-alpha/mac/$zipfile"
@@ -174,7 +174,7 @@ jobs:
           "Open-Ephys-Installer.dmg" \
           "open-ephys/"
 
-        installer=Open_Ephys_GUI_v1.0.0-alpha.1.dmg
+        installer=Open_Ephys_GUI_v1.0.0-alpha.2.dmg
         mv -v Open-Ephys-Installer.dmg $installer
 
         echo "Notarize DMG"

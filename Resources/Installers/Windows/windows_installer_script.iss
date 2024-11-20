@@ -1,14 +1,8 @@
 [Setup]
-<<<<<<< HEAD
-AppName=Open Ephys
-AppVersion=1.0.0-alpha.1
-AppVerName=Open Ephys 1.0.0-alpha.1
-=======
 AppId=Open Ephys
 AppName=Open Ephys GUI
-AppVersion=1.0.0-alpha.1
-AppVerName=Open Ephys GUI 1.0.0-alpha.1
->>>>>>> development-juce8
+AppVersion=1.0.0-alpha.2
+AppVerName=Open Ephys GUI 1.0.0-alpha.2
 AppCopyright=Copyright (C) 2010-2024, Open Ephys & Contributors
 AppPublisher=open-ephys.org
 AppPublisherURL=https://open-ephys.org/gui

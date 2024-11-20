@@ -54,7 +54,7 @@ jobs:
         cd Build
         cp -r Release open-ephys
         cp ../LICENSE open-ephys
-        zipfile=open-ephys-v1.0.0-alpha.1-linux.zip
+        zipfile=open-ephys-v1.0.0-alpha.2-linux.zip
         zip -r $zipfile open-ephys
         user_info="X-JFrog-Art-Api:$ARTIFACTORY_ACCESS_TOKEN"
         curl -H $user_info -T $zipfile "https://openephys.jfrog.io/artifactory/GUI-binaries/1.0.0-alpha/linux/$zipfile"
@@ -65,7 +65,7 @@ jobs:
         cp ../../../Scripts/40-open-ephys.rules usr/local/bin/open-ephys-gui
         cd ..
         dpkg-deb --build Open-Ephys_Installer
-        installer=open-ephys-gui-v1.0.0-alpha.1.deb
+        installer=open-ephys-gui-v1.0.0-alpha.2.deb
         mv -v Open-Ephys_Installer.deb $installer
         curl -H $user_info -T $installer "https://openephys.jfrog.io/artifactory/GUI-binaries/1.0.0-alpha/linux/$installer"
       shell: bash
